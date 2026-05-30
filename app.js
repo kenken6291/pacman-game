@@ -469,25 +469,16 @@ class Ghost {
     }
 }
 
-// CSSの変数から色を取得するヘルパー
-function varColor(varName, fallbackColor) {
-    if (typeof document !== 'undefined') {
-        const color = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
-        if (color) return color;
-    }
-    return fallbackColor;
-}
-
 // ゴーストのインスタンス作成
 const ghosts = [
     // Blinky (赤): 散開ターゲット右上, 初期位置 (14, 11), ドット制限 0
-    new Ghost('Blinky', varColor('--ghost-red', '#ff3333'), MAP_WIDTH - 2, -2, 14, 11, 0),
+    new Ghost('Blinky', '#ff3333', MAP_WIDTH - 2, -2, 14, 11, 0),
     // Pinky (ピンク): 散開ターゲット左上, 初期位置 (14, 14), ドット制限 0
-    new Ghost('Pinky', varColor('--ghost-pink', '#ffb8ff'), 2, -2, 14, 14, 0),
+    new Ghost('Pinky', '#ffb8ff', 2, -2, 14, 14, 0),
     // Inky (水色): 散開ターゲット右下, 初期位置 (12, 14), ドット制限 30
-    new Ghost('Inky', varColor('--ghost-cyan', '#00ffff'), MAP_WIDTH - 1, MAP_HEIGHT + 2, 12, 14, 30),
+    new Ghost('Inky', '#00ffff', MAP_WIDTH - 1, MAP_HEIGHT + 2, 12, 14, 30),
     // Clyde (オレンジ): 散開ターゲット左下, 初期位置 (16, 14), ドット制限 60
-    new Ghost('Clyde', varColor('--ghost-orange', '#ffb852'), 0, MAP_HEIGHT + 2, 16, 14, 60)
+    new Ghost('Clyde', '#ffb852', 0, MAP_HEIGHT + 2, 16, 14, 60)
 ];
 
 // --- ヘルパー関数 ---
@@ -915,30 +906,43 @@ document.querySelectorAll('.ctrl-btn').forEach(btn => {
 // --- ゲーム開始・再起動 ---
 
 function startGame() {
-    gameState = STATE_PLAY;
-    score = 0;
-    level = 1;
-    lives = 3;
-    dotsEaten = 0;
-    frightenedTimer = 0;
-    map = JSON.parse(JSON.stringify(ORIGINAL_MAP));
-    pacman.reset();
-    ghosts.forEach(g => g.reset());
-    
-    // UIを更新して音を鳴らす
-    updateUI();
-    window.gameAudio.playStartBGM();
-    
-    // イントロが終わるころ（約4秒後）にサイレン開始
-    setTimeout(() => {
-        if (gameState === STATE_PLAY) {
-            window.gameAudio.startSiren();
+    try {
+        gameState = STATE_PLAY;
+        score = 0;
+        level = 1;
+        lives = 3;
+        dotsEaten = 0;
+        frightenedTimer = 0;
+        map = JSON.parse(JSON.stringify(ORIGINAL_MAP));
+        pacman.reset();
+        ghosts.forEach(g => g.reset());
+        
+        // UIを更新して音を鳴らす
+        updateUI();
+        
+        try {
+            window.gameAudio.playStartBGM();
+        } catch (audioErr) {
+            console.error("Audio error:", audioErr);
         }
-    }, 4500);
+        
+        // イントロが終わるころ（約4秒後）にサイレン開始
+        setTimeout(() => {
+            if (gameState === STATE_PLAY) {
+                try {
+                    window.gameAudio.startSiren();
+                } catch (audioErr) {
+                    console.error("Audio error:", audioErr);
+                }
+            }
+        }, 4500);
 
-    const startBtn = document.getElementById('start-btn');
-    startBtn.innerText = 'Restart';
-    document.getElementById('game-title').classList.add('playing');
+        const startBtn = document.getElementById('start-btn');
+        startBtn.innerText = 'Restart';
+        document.getElementById('game-title').classList.add('playing');
+    } catch (e) {
+        console.error("Error during startGame:", e);
+    }
 }
 
 // イベントリスナー登録
