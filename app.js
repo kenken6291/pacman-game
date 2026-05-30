@@ -83,6 +83,9 @@ let frightenedTimer = 0;
 let frightenedDuration = 600; // フレーム数 (約10秒)
 let ghostEatenMultiplier = 1; // 連続で食べた時のスコア倍率
 
+// フローティングスコア（+200などの文字アニメーション）の管理用配列
+let floatingScores = [];
+
 // ハイスコア読み込み
 try {
     if (localStorage.getItem('pacman_neon_highscore')) {
@@ -678,12 +681,13 @@ function checkGhostCollisions() {
                 ghostEatenMultiplier *= 2; // 次に食べたゴーストはスコア2倍
                 playSound('playEatGhost');
                 
-                // フローティングスコア等の視覚フィードバック
-                ctx.save();
-                ctx.fillStyle = '#ffffff';
-                ctx.font = '10px "Press Start 2P"';
-                ctx.fillText(points, g.x - 10, g.y);
-                ctx.restore();
+                // フローティングスコア等の視覚フィードバックを登録（描画フェーズで安全に描画）
+                floatingScores.push({
+                    x: g.x,
+                    y: g.y,
+                    text: points,
+                    timer: 45 // 45フレーム表示
+                });
                 
                 checkHighScore();
                 break; // 同時衝突回避のためブレイク
@@ -836,6 +840,27 @@ function gameLoop() {
             }
         }
 
+        // フローティングスコアの安全な描画と更新
+        for (let i = floatingScores.length - 1; i >= 0; i--) {
+            const fs = floatingScores[i];
+            try {
+                ctx.save();
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '10px "Press Start 2P"';
+                ctx.textAlign = 'center';
+                // 上にふわっと浮き上がるアニメーション
+                ctx.fillText(fs.text, fs.x, fs.y - (45 - fs.timer) * 0.4);
+                ctx.restore();
+            } catch (fsErr) {
+                console.error("Error drawing floating score:", fsErr);
+                try { ctx.restore(); } catch (_) {}
+            }
+            fs.timer--;
+            if (fs.timer <= 0) {
+                floatingScores.splice(i, 1);
+            }
+        }
+
         // 各ステータスの画面表示
         if (gameState === STATE_START) {
             ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
@@ -949,6 +974,7 @@ function startGame() {
         lives = 3;
         dotsEaten = 0;
         frightenedTimer = 0;
+        floatingScores = []; // スコアアニメーションをクリア
         map = JSON.parse(JSON.stringify(ORIGINAL_MAP));
         pacman.reset();
         ghosts.forEach(g => g.reset());
