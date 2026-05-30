@@ -6,6 +6,17 @@ const TILE_SIZE = 16;
 const MAP_WIDTH = 28;
 const MAP_HEIGHT = 31;
 
+// 安全なオーディオ再生ヘルパー
+function playSound(methodName, ...args) {
+    if (window.gameAudio && typeof window.gameAudio[methodName] === 'function') {
+        try {
+            window.gameAudio[methodName](...args);
+        } catch (e) {
+            console.error(`Error playing sound ${methodName}:`, e);
+        }
+    }
+}
+
 // タイルマップ定義 (0:空, 1:壁, 2:ドット, 3:パワーエサ, 4:ゲート, 5:ゴーストハウス)
 const ORIGINAL_MAP = [
     [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
@@ -619,14 +630,14 @@ function checkEatenItems() {
         map[pacman.gridY][pacman.gridX] = 0;
         score += 10;
         dotsEaten++;
-        window.gameAudio.playWaka();
+        playSound('playWaka');
         checkHighScore();
     } else if (tile === 3) {
         // パワーエサ
         map[pacman.gridY][pacman.gridX] = 0;
         score += 50;
         dotsEaten++;
-        window.gameAudio.playPowerPellet();
+        playSound('playPowerPellet');
         
         // ゴースト全員をイジケ状態にする
         frightenedTimer = frightenedDuration;
@@ -637,21 +648,24 @@ function checkEatenItems() {
                 g.dir = getOppositeDirection(g.dir); // 即座に反転
             }
         });
-        window.gameAudio.startPowerSiren();
+        playSound('startPowerSiren');
         checkHighScore();
     }
 
     // クリアチェック
     if (dotsEaten >= totalDots) {
         gameState = STATE_CLEAR;
-        window.gameAudio.playLevelComplete();
+        playSound('playLevelComplete');
         setTimeout(nextLevel, 2000);
     }
 }
 
 // ゴーストとの衝突判定
 function checkGhostCollisions() {
-    ghosts.forEach(g => {
+    if (gameState !== STATE_PLAY) return;
+
+    for (let i = 0; i < ghosts.length; i++) {
+        const g = ghosts[i];
         // 近接度チェック (ピクセル距離で判定)
         const dist = Math.hypot(pacman.x - g.x, pacman.y - g.y);
         
@@ -662,9 +676,9 @@ function checkGhostCollisions() {
                 const points = 200 * ghostEatenMultiplier;
                 score += points;
                 ghostEatenMultiplier *= 2; // 次に食べたゴーストはスコア2倍
-                window.gameAudio.playEatGhost();
+                playSound('playEatGhost');
                 
-                // フローティングスコア等の視覚フィードバックがあると良い
+                // フローティングスコア等の視覚フィードバック
                 ctx.save();
                 ctx.fillStyle = '#ffffff';
                 ctx.font = '10px "Press Start 2P"';
@@ -672,14 +686,16 @@ function checkGhostCollisions() {
                 ctx.restore();
                 
                 checkHighScore();
+                break; // 同時衝突回避のためブレイク
             } else if (g.mode !== 'eaten' && g.mode !== 'house' && g.mode !== 'exit') {
                 // パックマン死亡
                 gameState = STATE_DEATH;
-                window.gameAudio.playDeath();
+                playSound('playDeath');
                 setTimeout(handleDeath, 1500);
+                break; // 死亡処理の重複登録（フリーズバグ）を防ぐために即ブレイク！
             }
         }
-    });
+    }
 }
 
 // ハイスコア更新チェック
@@ -706,7 +722,7 @@ function handleDeath() {
         pacman.reset();
         ghosts.forEach(g => g.reset());
         gameState = STATE_PLAY;
-        window.gameAudio.startSiren();
+        playSound('startSiren');
     }
 }
 
@@ -719,7 +735,7 @@ function nextLevel() {
     pacman.reset();
     ghosts.forEach(g => g.reset());
     gameState = STATE_PLAY;
-    window.gameAudio.startSiren();
+    playSound('startSiren');
 }
 
 // --- リザルトモーダル表示 ---
@@ -760,8 +776,8 @@ function gameLoop() {
         if (frightenedTimer > 0) {
             frightenedTimer--;
             if (frightenedTimer === 0) {
-                window.gameAudio.stopPowerSiren();
-                window.gameAudio.startSiren();
+                playSound('stopPowerSiren');
+                playSound('startSiren');
                 ghosts.forEach(g => {
                     if (g.mode === 'frightened') g.mode = 'chase';
                 });
@@ -874,12 +890,12 @@ window.addEventListener('keydown', (e) => {
         case 'p':
             if (gameState === STATE_PLAY) {
                 gameState = STATE_PAUSE;
-                window.gameAudio.stopSiren();
-                window.gameAudio.stopPowerSiren();
+                playSound('stopSiren');
+                playSound('stopPowerSiren');
             } else if (gameState === STATE_PAUSE) {
                 gameState = STATE_PLAY;
-                if (frightenedTimer > 0) window.gameAudio.startPowerSiren();
-                else window.gameAudio.startSiren();
+                if (frightenedTimer > 0) playSound('startPowerSiren');
+                else playSound('startSiren');
             }
             break;
         case 'enter':
@@ -920,20 +936,12 @@ function startGame() {
         // UIを更新して音を鳴らす
         updateUI();
         
-        try {
-            window.gameAudio.playStartBGM();
-        } catch (audioErr) {
-            console.error("Audio error:", audioErr);
-        }
+        playSound('playStartBGM');
         
         // イントロが終わるころ（約4秒後）にサイレン開始
         setTimeout(() => {
             if (gameState === STATE_PLAY) {
-                try {
-                    window.gameAudio.startSiren();
-                } catch (audioErr) {
-                    console.error("Audio error:", audioErr);
-                }
+                playSound('startSiren');
             }
         }, 4500);
 
@@ -948,7 +956,11 @@ function startGame() {
 // イベントリスナー登録
 document.getElementById('start-btn').addEventListener('click', () => {
     // ユーザー操作によるAudioContextの初期化
-    window.gameAudio.init();
+    if (window.gameAudio && typeof window.gameAudio.init === 'function') {
+        try {
+            window.gameAudio.init();
+        } catch(e) {}
+    }
     startGame();
 });
 
@@ -959,7 +971,12 @@ document.getElementById('restart-btn').addEventListener('click', () => {
 
 const muteBtn = document.getElementById('mute-btn');
 muteBtn.addEventListener('click', () => {
-    const isMuted = window.gameAudio.toggleMute();
+    let isMuted = false;
+    if (window.gameAudio && typeof window.gameAudio.toggleMute === 'function') {
+        try {
+            isMuted = window.gameAudio.toggleMute();
+        } catch(e) {}
+    }
     muteBtn.innerText = `Mute: ${isMuted ? 'ON' : 'OFF'}`;
 });
 
