@@ -713,16 +713,26 @@ function checkHighScore() {
 
 // 死亡処理
 function handleDeath() {
-    lives--;
-    if (lives <= 0) {
-        gameState = STATE_OVER;
-        showResultModal('GAME OVER', 'over');
-    } else {
-        // キャラクターだけリセット
-        pacman.reset();
-        ghosts.forEach(g => g.reset());
-        gameState = STATE_PLAY;
-        playSound('startSiren');
+    try {
+        lives--;
+        if (lives <= 0) {
+            gameState = STATE_OVER;
+            showResultModal('GAME OVER', 'over');
+        } else {
+            // キャラクターだけリセット
+            pacman.reset();
+            ghosts.forEach(g => {
+                try {
+                    g.reset();
+                } catch (ge) {
+                    console.error("Error resetting ghost:", ge);
+                }
+            });
+            gameState = STATE_PLAY;
+            playSound('startSiren');
+        }
+    } catch (e) {
+        console.error("Error during handleDeath:", e);
     }
 }
 
@@ -757,86 +767,96 @@ function hideResultModal() {
 
 // --- メインゲームループ ---
 function gameLoop() {
-    globalTimer++;
+    try {
+        globalTimer++;
 
-    // 画面クリア
-    ctx.fillStyle = '#030008';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+        // 画面クリア
+        ctx.fillStyle = '#030008';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // マップとUI描画
-    drawMap();
-    updateUI();
+        // マップとUI描画
+        drawMap();
+        updateUI();
 
-    if (gameState === STATE_PLAY) {
-        // モード変更タイマー（CHASEとSCATTERの周期切り替え）
-        // 20秒CHASE, 7秒SCATTERの繰り返し
-        const cycle = globalTimer % 1620; // 約27秒周期
-        
-        // イジケ時間の減少
-        if (frightenedTimer > 0) {
-            frightenedTimer--;
-            if (frightenedTimer === 0) {
-                playSound('stopPowerSiren');
-                playSound('startSiren');
-                ghosts.forEach(g => {
-                    if (g.mode === 'frightened') g.mode = 'chase';
-                });
+        if (gameState === STATE_PLAY) {
+            // モード変更タイマー（CHASEとSCATTERの周期切り替え）
+            // 20秒CHASE, 7秒SCATTERの繰り返し
+            const cycle = globalTimer % 1620; // 約27秒周期
+            
+            // イジケ時間の減少
+            if (frightenedTimer > 0) {
+                frightenedTimer--;
+                if (frightenedTimer === 0) {
+                    playSound('stopPowerSiren');
+                    playSound('startSiren');
+                    ghosts.forEach(g => {
+                        if (g.mode === 'frightened') g.mode = 'chase';
+                    });
+                }
+            }
+
+            ghosts.forEach(g => {
+                if (g.mode !== 'house' && g.mode !== 'exit' && g.mode !== 'eaten' && frightenedTimer === 0) {
+                    if (cycle < 1200) {
+                        g.mode = 'chase';
+                    } else {
+                        g.mode = 'scatter';
+                    }
+                }
+            });
+
+            // キャラクター位置更新
+            pacman.update();
+            ghosts.forEach(g => g.update());
+
+            // 衝突チェック
+            checkEatenItems();
+            checkGhostCollisions();
+        }
+
+        // プレイヤーとゴーストの描画
+        if (gameState !== STATE_DEATH) {
+            pacman.draw();
+            ghosts.forEach(g => g.draw());
+        } else {
+            // 死亡時のパックマンの簡単な消滅エフェクト
+            try {
+                ctx.save();
+                ctx.translate(pacman.x, pacman.y);
+                ctx.fillStyle = '#ffe600';
+                ctx.beginPath();
+                const deathProgress = (globalTimer % 30) / 30; // 0〜1
+                const radius = Math.max(0.1, (TILE_SIZE / 2) * (1 - deathProgress));
+                ctx.arc(0, 0, radius, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.restore();
+            } catch (e) {
+                console.error("Error drawing death effect:", e);
+                try { ctx.restore(); } catch (_) {}
             }
         }
 
-        ghosts.forEach(g => {
-            if (g.mode !== 'house' && g.mode !== 'exit' && g.mode !== 'eaten' && frightenedTimer === 0) {
-                if (cycle < 1200) {
-                    g.mode = 'chase';
-                } else {
-                    g.mode = 'scatter';
-                }
-            }
-        });
-
-        // キャラクター位置更新
-        pacman.update();
-        ghosts.forEach(g => g.update());
-
-        // 衝突チェック
-        checkEatenItems();
-        checkGhostCollisions();
-    }
-
-    // プレイヤーとゴーストの描画
-    if (gameState !== STATE_DEATH) {
-        pacman.draw();
-        ghosts.forEach(g => g.draw());
-    } else {
-        // 死亡時のパックマンの簡単な消滅エフェクト
-        ctx.save();
-        ctx.translate(pacman.x, pacman.y);
-        ctx.fillStyle = '#ffe600';
-        ctx.beginPath();
-        const deathProgress = (globalTimer % 30) / 30; // 0〜1
-        ctx.arc(0, 0, (TILE_SIZE / 2) * (1 - deathProgress), 0, 2 * Math.PI);
-        ctx.fill();
-        ctx.restore();
-    }
-
-    // 各ステータスの画面表示
-    if (gameState === STATE_START) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = '#00f2fe';
-        ctx.font = '14px "Press Start 2P"';
-        ctx.textAlign = 'center';
-        ctx.fillText('PRESS START GAME', canvas.width / 2, canvas.height / 2 - 20);
-        ctx.fillStyle = '#ffe600';
-        ctx.font = '10px "Orbitron"';
-        ctx.fillText('CLICK BUTTON OR PRESS ENTER', canvas.width / 2, canvas.height / 2 + 10);
-    } else if (gameState === STATE_PAUSE) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = '#ff007f';
-        ctx.font = '18px "Press Start 2P"';
-        ctx.textAlign = 'center';
-        ctx.fillText('PAUSED', canvas.width / 2, canvas.height / 2);
+        // 各ステータスの画面表示
+        if (gameState === STATE_START) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#00f2fe';
+            ctx.font = '14px "Press Start 2P"';
+            ctx.textAlign = 'center';
+            ctx.fillText('PRESS START GAME', canvas.width / 2, canvas.height / 2 - 20);
+            ctx.fillStyle = '#ffe600';
+            ctx.font = '10px "Orbitron"';
+            ctx.fillText('CLICK BUTTON OR PRESS ENTER', canvas.width / 2, canvas.height / 2 + 10);
+        } else if (gameState === STATE_PAUSE) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#ff007f';
+            ctx.font = '18px "Press Start 2P"';
+            ctx.textAlign = 'center';
+            ctx.fillText('PAUSED', canvas.width / 2, canvas.height / 2);
+        }
+    } catch (e) {
+        console.error("Error in gameLoop:", e);
     }
 
     requestAnimationFrame(gameLoop);
