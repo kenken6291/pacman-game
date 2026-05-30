@@ -73,9 +73,13 @@ let frightenedDuration = 600; // フレーム数 (約10秒)
 let ghostEatenMultiplier = 1; // 連続で食べた時のスコア倍率
 
 // ハイスコア読み込み
-if (localStorage.getItem('pacman_neon_highscore')) {
-    highScore = parseInt(localStorage.getItem('pacman_neon_highscore'));
-    document.getElementById('highscore').innerText = String(highScore).padStart(6, '0');
+try {
+    if (localStorage.getItem('pacman_neon_highscore')) {
+        highScore = parseInt(localStorage.getItem('pacman_neon_highscore'));
+        document.getElementById('highscore').innerText = String(highScore).padStart(6, '0');
+    }
+} catch (e) {
+    console.warn("LocalStorage is not available:", e);
 }
 
 // --- キャラクターの定義 ---
@@ -465,40 +469,26 @@ class Ghost {
     }
 }
 
-// ゴーストのインスタンス作成
-const ghosts = [
-    new Ghost('Blinky', varColor('--ghost-red')),      // 赤: 右上
-    new Ghost('Pinky', varColor('--ghost-pink')),      // ピンク: 左上
-    new Ghost('Inky', varColor('--ghost-cyan')),       // 水色: 右下
-    new Ghost('Clyde', varColor('--ghost-orange'))     // オレンジ: 左下
-];
-
 // CSSの変数から色を取得するヘルパー
-function varColor(varName) {
-    return getComputedStyle(document.documentElement).getPropertyValue(varName).trim() || '#ff0000';
+function varColor(varName, fallbackColor) {
+    if (typeof document !== 'undefined') {
+        const color = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+        if (color) return color;
+    }
+    return fallbackColor;
 }
 
-// 散開ターゲット座標
-ghosts[0].scatterTarget = { x: MAP_WIDTH - 2, y: -2 };
-ghosts[1].scatterTarget = { x: 2, y: -2 };
-ghosts[2].scatterTarget = { x: MAP_WIDTH - 1, y: MAP_HEIGHT + 2 };
-ghosts[3].scatterTarget = { x: 0, y: MAP_HEIGHT + 2 };
-
-// 巣の初期位置
-ghosts[0].homeX = 14 * TILE_SIZE + TILE_SIZE / 2;
-ghosts[0].homeY = 11 * TILE_SIZE + TILE_SIZE / 2; // Blinkyは最初から外
-ghosts[1].homeX = 14 * TILE_SIZE + TILE_SIZE / 2;
-ghosts[1].homeY = 14 * TILE_SIZE + TILE_SIZE / 2; // Pinky: 巣の中央
-ghosts[2].homeX = 12 * TILE_SIZE + TILE_SIZE / 2;
-ghosts[2].homeY = 14 * TILE_SIZE + TILE_SIZE / 2; // Inky: 巣の左
-ghosts[3].homeX = 16 * TILE_SIZE + TILE_SIZE / 2;
-ghosts[3].homeY = 14 * TILE_SIZE + TILE_SIZE / 2; // Clyde: 巣の右
-
-// 巣から出るドット閾値
-ghosts[0].dotLimit = 0;
-ghosts[1].dotLimit = 0;
-ghosts[2].dotLimit = 30;
-ghosts[3].dotLimit = 60;
+// ゴーストのインスタンス作成
+const ghosts = [
+    // Blinky (赤): 散開ターゲット右上, 初期位置 (14, 11), ドット制限 0
+    new Ghost('Blinky', varColor('--ghost-red', '#ff3333'), MAP_WIDTH - 2, -2, 14, 11, 0),
+    // Pinky (ピンク): 散開ターゲット左上, 初期位置 (14, 14), ドット制限 0
+    new Ghost('Pinky', varColor('--ghost-pink', '#ffb8ff'), 2, -2, 14, 14, 0),
+    // Inky (水色): 散開ターゲット右下, 初期位置 (12, 14), ドット制限 30
+    new Ghost('Inky', varColor('--ghost-cyan', '#00ffff'), MAP_WIDTH - 1, MAP_HEIGHT + 2, 12, 14, 30),
+    // Clyde (オレンジ): 散開ターゲット左下, 初期位置 (16, 14), ドット制限 60
+    new Ghost('Clyde', varColor('--ghost-orange', '#ffb852'), 0, MAP_HEIGHT + 2, 16, 14, 60)
+];
 
 // --- ヘルパー関数 ---
 
@@ -705,7 +695,11 @@ function checkGhostCollisions() {
 function checkHighScore() {
     if (score > highScore) {
         highScore = score;
-        localStorage.setItem('pacman_neon_highscore', highScore);
+        try {
+            localStorage.setItem('pacman_neon_highscore', highScore);
+        } catch (e) {
+            console.warn("Could not save high score to LocalStorage:", e);
+        }
         document.getElementById('highscore').innerText = String(highScore).padStart(6, '0');
     }
 }
