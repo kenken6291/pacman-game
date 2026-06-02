@@ -880,6 +880,20 @@ function gameLoop() {
             ctx.textAlign = 'center';
             ctx.fillText('PAUSED', canvas.width / 2, canvas.height / 2);
         }
+
+        // 仮想キーのハイライト更新
+        if (gameState === STATE_PLAY) {
+            document.querySelectorAll('.ctrl-btn').forEach(btn => {
+                const btnDir = btn.getAttribute('data-dir');
+                if (btnDir === pacman.nextDir.name) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+        } else {
+            document.querySelectorAll('.ctrl-btn').forEach(btn => btn.classList.remove('active'));
+        }
     } catch (e) {
         console.error("Error in gameLoop:", e);
     }
@@ -951,18 +965,104 @@ window.addEventListener('keydown', (e) => {
     }
 });
 
-// モバイルタッチボタン
+// --- タッチ操作およびスワイプ、スクロール防止、タッチデバイス自動検出 ---
+let touchStartX = 0;
+let touchStartY = 0;
+const SWIPE_THRESHOLD = 30; // スワイプと判定する最小ピクセル数
+
+// タッチデバイス判定とコントロール表示の制御
+const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+const mobileControls = document.querySelector('.mobile-controls');
+
+if (mobileControls) {
+    if (isTouchDevice) {
+        mobileControls.style.display = ''; // CSSの定義(grid)に従う
+    } else {
+        // 非タッチデバイスでは画面を縮めても非表示に強制する
+        mobileControls.style.setProperty('display', 'none', 'important');
+    }
+}
+
+// 仮想キーのイベントハンドリング（touchstart & mousedown）
 document.querySelectorAll('.ctrl-btn').forEach(btn => {
     btn.addEventListener('touchstart', (e) => {
         e.preventDefault();
         const dir = btn.getAttribute('data-dir');
         handleDirectionInput(dir);
-    });
+        
+        // 音声のアンロック
+        if (window.gameAudio && typeof window.gameAudio.init === 'function') {
+            try { window.gameAudio.init(); } catch (_) {}
+        }
+    }, { passive: false });
+    
     btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
         const dir = btn.getAttribute('data-dir');
         handleDirectionInput(dir);
     });
 });
+
+// スワイプによる操作 & スクロール防止イベントリスナー
+window.addEventListener('touchstart', (e) => {
+    const target = e.target;
+    // ゲーム画面、仮想キー、またはそのコンテナでのみスワイプ・スクロール制御を行う
+    if (target.closest('#gameCanvas') || target.closest('.mobile-controls') || target.closest('.canvas-wrapper')) {
+        if (target.tagName !== 'BUTTON' && target.tagName !== 'A') {
+            e.preventDefault();
+        }
+    }
+    
+    touchStartX = e.changedTouches[0].clientX;
+    touchStartY = e.changedTouches[0].clientY;
+    
+    // 音声のアンロック
+    if (window.gameAudio && typeof window.gameAudio.init === 'function') {
+        try { window.gameAudio.init(); } catch (_) {}
+    }
+}, { passive: false });
+
+window.addEventListener('touchmove', (e) => {
+    const target = e.target;
+    if (target.closest('#gameCanvas') || target.closest('.mobile-controls') || target.closest('.canvas-wrapper')) {
+        if (target.tagName !== 'BUTTON' && target.tagName !== 'A') {
+            e.preventDefault();
+        }
+    }
+}, { passive: false });
+
+window.addEventListener('touchend', (e) => {
+    const target = e.target;
+    if (target.closest('#gameCanvas') || target.closest('.mobile-controls') || target.closest('.canvas-wrapper')) {
+        if (target.tagName !== 'BUTTON' && target.tagName !== 'A') {
+            e.preventDefault();
+        }
+    }
+    
+    const touchEndX = e.changedTouches[0].clientX;
+    const touchEndY = e.changedTouches[0].clientY;
+    
+    const diffX = touchEndX - touchStartX;
+    const diffY = touchEndY - touchStartY;
+    
+    if (Math.max(Math.abs(diffX), Math.abs(diffY)) > SWIPE_THRESHOLD) {
+        if (Math.abs(diffX) > Math.abs(diffY)) {
+            // 左右のスワイプ
+            if (diffX > 0) {
+                handleDirectionInput('right');
+            } else {
+                handleDirectionInput('left');
+            }
+        } else {
+            // 上下のスワイプ
+            if (diffY > 0) {
+                handleDirectionInput('down');
+            } else {
+                handleDirectionInput('up');
+            }
+        }
+    }
+}, { passive: false });
 
 // --- ゲーム開始・再起動 ---
 

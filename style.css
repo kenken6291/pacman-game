@@ -416,11 +416,12 @@ footer a:hover {
     .game-container {
         flex-direction: column;
         align-items: center;
+        gap: 20px;
     }
     
     .info-panel {
         width: 100%;
-        max-width: 460px;
+        max-width: 448px;
     }
 
     h1 {
@@ -428,9 +429,20 @@ footer a:hover {
     }
 }
 
-@media (max-width: 500px) {
+@media (max-width: 768px) {
+    body {
+        padding: 10px 5px;
+        justify-content: flex-start;
+        min-height: 100dvh;
+    }
+    
+    header {
+        margin-bottom: 10px;
+    }
+    
     h1 {
-        font-size: 1.5rem;
+        font-size: 1.8rem;
+        margin-bottom: 4px;
     }
     
     .subtitle {
@@ -438,16 +450,183 @@ footer a:hover {
         letter-spacing: 2px;
     }
 
-    body {
-        padding: 10px;
+    .game-container {
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
     }
-
+    
     .canvas-wrapper {
-        padding: 5px;
+        width: 100%;
+        max-width: 400px;
+        padding: 6px;
+        box-shadow: 0 0 15px var(--border-glow);
+    }
+    
+    canvas {
+        width: 100%;
+        height: auto;
+    }
+    
+    .info-panel {
+        width: 100%;
+        max-width: 400px;
+        padding: 12px 16px;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: space-between;
+    }
+    
+    .info-panel .panel-section {
+        border-bottom: none;
+        padding-bottom: 0;
+        flex: 1 1 22%;
+        min-width: 70px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+    
+    /* コントロール説明はスマホでは非表示 */
+    .info-panel .panel-section:last-child {
+        display: none;
+    }
+    
+    .panel-title {
+        font-size: 0.65rem;
+        margin-bottom: 2px;
+        text-align: center;
+    }
+    
+    .panel-value {
+        font-size: 1.1rem;
+        text-align: center;
+    }
+    
+    .lives-container {
+        margin-top: 2px;
+        justify-content: center;
+    }
+    
+    .btn-group {
+        flex: 1 1 100%;
+        flex-direction: row;
+        gap: 10px;
+        margin-top: 5px;
+    }
+    
+    .btn-group button {
+        flex: 1;
+        padding: 8px 12px;
+        font-size: 0.8rem;
+        letter-spacing: 1px;
+    }
+    
+    /* グリッドレイアウトによるD-Pad配置 */
+    .mobile-controls {
+        display: grid;
+        grid-template-columns: repeat(3, 55px);
+        grid-template-rows: repeat(3, 55px);
+        gap: 8px;
+        justify-content: center;
+        align-content: center;
+        margin-top: 15px;
+        touch-action: none;
+    }
+    
+    .ctrl-row {
+        display: contents;
+    }
+    
+    .ctrl-btn {
+        width: 55px;
+        height: 55px;
+        border-radius: 12px;
+        border: 2px solid var(--neon-blue);
+        background: rgba(13, 8, 22, 0.85);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        cursor: pointer;
+        box-shadow: 0 0 10px rgba(0, 242, 254, 0.3), inset 0 0 8px rgba(0, 242, 254, 0.1);
+        transition: all 0.1s ease;
+        touch-action: none;
     }
 
-    /* タッチ対応時コントローラーを表示 */
-    .mobile-controls {
-        display: flex;
+    .ctrl-btn.up {
+        grid-column: 2;
+        grid-row: 1;
+    }
+    .ctrl-btn.left {
+        grid-column: 1;
+        grid-row: 2;
+    }
+    .ctrl-btn.right {
+        grid-column: 3;
+        grid-row: 2;
+    }
+    .ctrl-btn.down {
+        grid-column: 2;
+        grid-row: 3;
+    }
+    
+    .ctrl-btn:active, .ctrl-btn.active {
+        background: var(--neon-pink);
+        border-color: var(--neon-pink);
+        transform: scale(0.92);
+        box-shadow: 0 0 15px var(--neon-pink), inset 0 0 10px rgba(255, 0, 127, 0.4);
+    }
+    
+    .ctrl-btn::after {
+        content: '';
+        width: 0;
+        height: 0;
+        border-style: solid;
+        transition: border-color 0.1s ease;
+    }
+    
+    .ctrl-btn.up::after {
+        border-width: 0 7px 10px 7px;
+        border-color: transparent transparent var(--neon-blue) transparent;
+    }
+    .ctrl-btn.down::after {
+        border-width: 10px 7px 0 7px;
+        border-color: var(--neon-blue) transparent transparent transparent;
+    }
+    .ctrl-btn.left::after {
+        border-width: 7px 10px 7px 0;
+        border-color: transparent var(--neon-blue) transparent transparent;
+    }
+    .ctrl-btn.right::after {
+        border-width: 7px 0 7px 10px;
+        border-color: transparent transparent transparent var(--neon-blue);
+    }
+    
+    .ctrl-btn:active::after, .ctrl-btn.active::after {
+        border-color: transparent;
+    }
+    .ctrl-btn.up:active::after, .ctrl-btn.up.active::after { border-bottom-color: #000; }
+    .ctrl-btn.down:active::after, .ctrl-btn.down.active::after { border-top-color: #000; }
+    .ctrl-btn.left:active::after, .ctrl-btn.left.active::after { border-right-color: #000; }
+    .ctrl-btn.right:active::after, .ctrl-btn.right.active::after { border-left-color: #000; }
+    
+    footer {
+        margin-top: 15px;
+        font-size: 0.7rem;
     }
 }
+
+@media (max-width: 360px) {
+    .canvas-wrapper, .info-panel {
+        max-width: 310px;
+    }
+    
+    h1 {
+        font-size: 1.5rem;
+    }
+}
+
