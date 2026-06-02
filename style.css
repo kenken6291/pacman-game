@@ -462,6 +462,7 @@ footer a:hover {
         max-width: 400px;
         padding: 6px;
         box-shadow: 0 0 15px var(--border-glow);
+        order: 1;
     }
     
     canvas {
@@ -477,6 +478,7 @@ footer a:hover {
         flex-wrap: wrap;
         gap: 8px;
         justify-content: space-between;
+        order: 3;
     }
     
     .info-panel .panel-section {
@@ -532,8 +534,9 @@ footer a:hover {
         gap: 8px;
         justify-content: center;
         align-content: center;
-        margin-top: 15px;
+        margin-top: 5px;
         touch-action: none;
+        order: 2;
     }
     
     .ctrl-row {

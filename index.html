@@ -20,6 +20,21 @@
             <canvas id="gameCanvas" width="448" height="496"></canvas>
         </div>
 
+        <!-- モバイル用仮想コントローラー（スマホサイズ時に表示） -->
+        <div class="mobile-controls">
+            <div class="ctrl-row">
+                <div class="ctrl-btn up" id="ctrl-up" data-dir="up"></div>
+            </div>
+            <div class="ctrl-row">
+                <div class="ctrl-btn left" id="ctrl-left" data-dir="left"></div>
+                <div class="ctrl-btn" style="visibility: hidden;"></div>
+                <div class="ctrl-btn right" id="ctrl-right" data-dir="right"></div>
+            </div>
+            <div class="ctrl-row">
+                <div class="ctrl-btn down" id="ctrl-down" data-dir="down"></div>
+            </div>
+        </div>
+
         <!-- 情報およびコントロールパネル -->
         <div class="info-panel">
             <div class="panel-section">
@@ -74,21 +89,6 @@
                     </tr>
                 </table>
             </div>
-        </div>
-    </div>
-
-    <!-- モバイル用仮想コントローラー（スマホサイズ時に表示） -->
-    <div class="mobile-controls">
-        <div class="ctrl-row">
-            <div class="ctrl-btn up" id="ctrl-up" data-dir="up"></div>
-        </div>
-        <div class="ctrl-row">
-            <div class="ctrl-btn left" id="ctrl-left" data-dir="left"></div>
-            <div class="ctrl-btn" style="visibility: hidden;"></div>
-            <div class="ctrl-btn right" id="ctrl-right" data-dir="right"></div>
-        </div>
-        <div class="ctrl-row">
-            <div class="ctrl-btn down" id="ctrl-down" data-dir="down"></div>
         </div>
     </div>
 
