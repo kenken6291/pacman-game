@@ -1,0 +1,15 @@
+{
+  "name": "パックマン - Pacman Canvas",
+  "short_name": "パックマン",
+  "description": "ブラウザで遊べるパックマン風ゲーム",
+  "lang": "ja",
+  "display": "standalone",
+  "orientation": "portrait",
+  "start_url": "./",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    { "src": "img/icon-128.png", "sizes": "128x128", "type": "image/png" },
+    { "src": "img/Icon-512x512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

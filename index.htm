@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+	<meta charset="utf-8" />
+	<title>パックマン - Pacman Canvas</title>
+	<meta name="description" content="ブラウザで遊べるパックマン風ゲーム。パソコンはキーボード、スマホはスワイプやボタンで操作できます。" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0, viewport-fit=cover" />
+	<meta name="theme-color" content="#000000" />
+	<meta name="apple-mobile-web-app-capable" content="yes" />
+	<meta name="mobile-web-app-capable" content="yes" />
+
+	<meta property="og:title" content="パックマン - Pacman Canvas" />
+	<meta property="og:description" content="ブラウザで遊べるパックマン風ゲーム" />
+	<meta property="og:image" content="img/Icon-200x200.png" />
+	<meta property="og:type" content="website" />
+
+	<link rel="icon" href="img/Icon-32x32.png" />
+	<link rel="apple-touch-icon" href="img/Icon-130x130.png" />
+	<link rel="manifest" href="manifest.json">
+
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
+	<link rel="stylesheet" href="pacman-canvas.css">
+
+	<script src="js/jquery-1.10.2.min.js"></script>
+	<script src="js/jquery.hammer.min.js"></script>
+</head>
+
+<body>
+
+<noscript>
+	<h2>JavaScriptを有効にしてください</h2>
+	<p>このゲームはJavaScriptで動いています。</p>
+</noscript>
+
+<div class="container">
+<div class="main">
+
+<!-- ランキング -->
+<div class="content page" id="highscore-content">
+	<span class="button back">&lt; もどる</span>
+	<h1>ランキング</h1>
+	<p class="note">このブラウザで遊んだ記録のトップ10です。</p>
+	<ol id="highscore-list"></ol>
+	<p><span class="button small" id="clear-highscore">記録を消す</span></p>
+</div>
+
+<!-- 遊び方 -->
+<div class="content page" id="instructions-content">
+	<span class="button back">&lt; もどる</span>
+	<h1>遊び方</h1>
+
+	<h2>目的</h2>
+	<p>おばけにつかまらないように、迷路のエサ（白い点）をすべて食べるとステージクリア。ステージが進むほど難しくなります。</p>
+
+	<h2>操作方法</h2>
+	<table class="keys">
+		<tr><th>移動</th><td>矢印キー / W・A・S・D<br/>スマホ：スワイプ か 画面下のボタン</td></tr>
+		<tr><th>ポーズ / 再開</th><td>スペース・P・Enter、または画面をクリック・タップ</td></tr>
+		<tr><th>音のオン/オフ</th><td>M キー、または 🔇 ボタン</td></tr>
+		<tr><th>新しいゲーム</th><td>N キー</td></tr>
+	</table>
+	<p class="note">音は最初オフになっています。右上の 🔇 で切り替えできます。</p>
+
+	<h2>得点</h2>
+	<table class="keys">
+		<tr><th>エサ</th><td>10点</td></tr>
+		<tr><th>パワーエサ（大きい点）</th><td>50点。しばらくおばけが青くなり、食べられるようになります。</td></tr>
+		<tr><th>青いおばけ</th><td>1匹目 200点 → 400 → 800 → 1600点と連続で倍になります。</td></tr>
+		<tr><th>ボーナス</th><td>10,000点で1回だけ残機が1つ増えます。</td></tr>
+	</table>
+	<img src="img/instructions/instructions_powerpill.PNG" alt="パワーエサを食べたところ">
+
+	<h2>おばけたち</h2>
+	<div class="ghost"><img src="img/blinky.svg" alt=""><div><h3>ブリンキー（赤）</h3><p>いちばん攻撃的。パックマンをまっすぐ追いかけてきます。</p></div></div>
+	<div class="ghost"><img src="img/pinky.svg" alt=""><div><h3>ピンキー（ピンク）</h3><p>パックマンの進む先に回り込もうとします。</p></div></div>
+	<div class="ghost"><img src="img/inky.svg" alt=""><div><h3>インキー（水色）</h3><p>レベル3から登場。エサを30個食べると巣から出てきます。</p></div></div>
+	<div class="ghost"><img src="img/clyde.svg" alt=""><div><h3>クライド（オレンジ）</h3><p>レベル4から登場。エサが残り1/3になると出てきます。近づくと逃げる気まぐれ屋。</p></div></div>
+
+	<h2>おばけのモード</h2>
+	<h3>なわばりモード（壁が青）</h3>
+	<p>おばけはそれぞれの隅（なわばり）に向かいます。レベル1はずっとこのモードです。</p>
+	<img src="img/instructions/instructions_scatter.PNG" alt="なわばりモード">
+	<h3>追跡モード（壁が赤）</h3>
+	<p>レベル2から、時間がたつと壁が赤くなり、おばけがパックマンを追いかけてきます。</p>
+	<img src="img/instructions/instructions_chase.PNG" alt="追跡モード">
+	<p>レベル5からはおばけのスピードが上がります。</p>
+</div>
+
+<!-- 情報 -->
+<div class="content page" id="info-content">
+	<span class="button back">&lt; もどる</span>
+	<h1>このゲームについて</h1>
+	<p>HTML5 Canvas と JavaScript で作られたパックマン風ゲームです。</p>
+	<p>元のプログラムは platzh1rsch さんが作ったオープンソースの <a target="_blank" rel="noopener" href="https://github.com/platzhersh/pacman-canvas">Pacman Canvas</a> です。これを日本語化・改良しています。</p>
+	<p class="note">ランキングはお使いのブラウザ内だけに保存されます。</p>
+</div>
+
+<!-- ゲーム画面 -->
+<div class="content" id="game-content">
+	<div class="game">
+
+		<div class="hud">
+			<div class="score"></div>
+			<div class="hiscore"></div>
+			<div class="level"></div>
+			<button type="button" id="sound-toggle" aria-label="音のオン/オフ">🔇</button>
+		</div>
+		<div class="lives-row"><span class="lives"></span></div>
+
+		<div id="canvas-container">
+			<div id="canvas-overlay-container">
+				<div id="canvas-overlay-content">
+					<div id="title">PAC-MAN</div>
+					<div id="text"><span class="blink">クリック・タップでスタート</span></div>
+				</div>
+			</div>
+			<canvas id="myCanvas" width="540" height="390">
+				<p>お使いのブラウザは Canvas に対応していません</p>
+			</canvas>
+		</div>
+
+		<!-- 方向ボタン（スマホ・タブレットのみ表示） -->
+		<div class="controls" id="game-buttons">
+			<div class="pad">
+				<span id="up" class="controlButton">▲</span>
+				<span id="left" class="controlButton">◀</span>
+				<span id="right" class="controlButton">▶</span>
+				<span id="down" class="controlButton">▼</span>
+			</div>
+		</div>
+
+		<!-- メニュー（ポーズ中に表示） -->
+		<div class="controls" id="menu-buttons">
+			<ul>
+				<li class="button" id="newGame">新しいゲーム</li>
+				<li class="button" id="highscore">ランキング</li>
+				<li class="button" id="instructions">遊び方</li>
+				<li class="button wide" id="info">このゲームについて</li>
+			</ul>
+			<p class="hint pc-only">←↑↓→ / WASD で移動　スペースでポーズ</p>
+		</div>
+
+	</div>
+</div>
+
+</div>
+</div>
+
+<!-- 確認ダイアログ -->
+<div id="confirm-modal">
+	<div class="modal-box">
+		<p>今のゲームをやめて<br/>最初からやり直しますか？</p>
+		<span class="button" id="confirm-yes">はい</span>
+		<span class="button ghost-btn" id="confirm-no">いいえ</span>
+	</div>
+</div>
+
+<div id="audio" hidden>
+	<audio id="waka" preload="auto">
+		<source src="mp3/waka.mp3" type="audio/mpeg">
+		<source src="wav/waka.wav" type="audio/wav">
+	</audio>
+	<audio id="die" preload="auto">
+		<source src="mp3/die.mp3" type="audio/mpeg">
+		<source src="wav/die.wav" type="audio/wav">
+	</audio>
+	<audio id="powerpill" preload="auto">
+		<source src="mp3/powerpill.mp3" type="audio/mpeg">
+		<source src="wav/powerpill.wav" type="audio/wav">
+	</audio>
+	<audio id="eatghost" preload="auto">
+		<source src="mp3/eatghost.mp3" type="audio/mpeg">
+		<source src="wav/eatghost.wav" type="audio/wav">
+	</audio>
+</div>
+
+<script src="pacman-canvas.js"></script>
+</body>
+</html>
