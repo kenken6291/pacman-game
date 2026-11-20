@@ -1,342 +1,217 @@
+/* =========================================================
+   PAC-MAN NEON - audio.js v2.0.0
+   Web Audio API による効果音のリアルタイム合成
+   ========================================================= */
 class GameAudio {
     constructor() {
         this.ctx = null;
+        this.master = null;
         this.muted = false;
-        this.sirenInterval = null;
-        this.powerSirenInterval = null;
+        this.wakaFlip = false;
+        this.loop = null;          // 鳴り続けるループ音（サイレン等）
+        this.loopKind = 'none';
+        try {
+            this.muted = localStorage.getItem('pacman_neon_muted') === '1';
+        } catch (_) { /* localStorage 不可 */ }
     }
 
+    /** ユーザー操作のたびに呼ぶ（iOS対策で毎回 resume する） */
     init() {
-        if (this.ctx) return;
-        
         try {
-            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-            if (!AudioContextClass) {
-                console.warn("Web Audio API is not supported in this browser.");
-                this.muted = true;
-                return;
+            if (!this.ctx) {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) return;
+                this.ctx = new AC();
+                this.master = this.ctx.createGain();
+                this.master.gain.value = this.muted ? 0 : 0.6;
+                this.master.connect(this.ctx.destination);
+                // iOS のアンロック用に無音を一瞬鳴らす
+                const buf = this.ctx.createBuffer(1, 1, 22050);
+                const src = this.ctx.createBufferSource();
+                src.buffer = buf;
+                src.connect(this.master);
+                src.start(0);
             }
-            this.ctx = new AudioContextClass();
+            if (this.ctx.state === 'suspended') {
+                const p = this.ctx.resume();
+                if (p && p.catch) p.catch(() => {});
+            }
         } catch (e) {
-            console.error("Failed to initialize AudioContext:", e);
-            this.muted = true;
-            return;
+            console.warn('Audio init failed:', e);
         }
+    }
 
-        if (this.ctx && this.ctx.state === 'suspended') {
-            try {
-                this.ctx.resume();
-            } catch (e) {
-                console.error("Failed to resume AudioContext:", e);
-            }
+    get ready() {
+        return !!(this.ctx && this.master);
+    }
+
+    setMuted(m) {
+        this.muted = m;
+        try { localStorage.setItem('pacman_neon_muted', m ? '1' : '0'); } catch (_) {}
+        if (this.ready) {
+            this.master.gain.setTargetAtTime(m ? 0 : 0.6, this.ctx.currentTime, 0.02);
         }
     }
 
     toggleMute() {
-        this.muted = !this.muted;
-        if (this.muted) {
-            this.stopSiren();
-            this.stopPowerSiren();
-        }
+        this.setMuted(!this.muted);
         return this.muted;
     }
 
-    playWaka() {
-        if (this.muted) return;
-        this.init();
-        if (!this.ctx) return;
-
+    /** 単音を鳴らす汎用ヘルパー */
+    tone(freq, dur, { type = 'square', vol = 0.12, at = 0, slide = null, slideType = 'exp' } = {}) {
+        if (!this.ready || this.muted) return;
         try {
-            const now = this.ctx.currentTime;
+            const t0 = this.ctx.currentTime + at;
             const osc = this.ctx.createOscillator();
-            const gain = this.ctx.createGain();
-
-            osc.type = 'triangle';
-            osc.frequency.setValueAtTime(300, now);
-            osc.frequency.quadraticRampToValueAtTime(600, now + 0.04);
-            osc.frequency.quadraticRampToValueAtTime(150, now + 0.08);
-
-            gain.gain.setValueAtTime(0.15, now);
-            gain.gain.linearRampToValueAtTime(0.01, now + 0.08);
-
-            osc.connect(gain);
-            gain.connect(this.ctx.destination);
-
-            osc.start(now);
-            osc.stop(now + 0.08);
+            const g = this.ctx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, t0);
+            if (slide) {
+                if (slideType === 'exp') osc.frequency.exponentialRampToValueAtTime(slide, t0 + dur);
+                else osc.frequency.linearRampToValueAtTime(slide, t0 + dur);
+            }
+            g.gain.setValueAtTime(vol, t0);
+            g.gain.exponentialRampToValueAtTime(0.0008, t0 + dur);
+            osc.connect(g);
+            g.connect(this.master);
+            osc.start(t0);
+            osc.stop(t0 + dur + 0.02);
         } catch (e) {
-            console.error("Failed to play waka sound:", e);
+            console.warn('tone error', e);
         }
+    }
+
+    // ---------- 単発の効果音 ----------
+    playWaka() {
+        // 「ワ」「カ」を交互に鳴らす
+        this.wakaFlip = !this.wakaFlip;
+        if (this.wakaFlip) this.tone(240, 0.085, { type: 'triangle', vol: 0.16, slide: 520 });
+        else this.tone(520, 0.085, { type: 'triangle', vol: 0.16, slide: 240 });
     }
 
     playPowerPellet() {
-        if (this.muted) return;
-        this.init();
-        if (!this.ctx) return;
-
-        try {
-            const now = this.ctx.currentTime;
-            const osc = this.ctx.createOscillator();
-            const gain = this.ctx.createGain();
-
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(150, now);
-            osc.frequency.exponentialRampToValueAtTime(600, now + 0.15);
-
-            gain.gain.setValueAtTime(0.2, now);
-            gain.gain.linearRampToValueAtTime(0.01, now + 0.15);
-
-            osc.connect(gain);
-            gain.connect(this.ctx.destination);
-
-            osc.start(now);
-            osc.stop(now + 0.15);
-        } catch (e) {
-            console.error("Failed to play power pellet sound:", e);
-        }
+        this.tone(160, 0.18, { type: 'square', vol: 0.1, slide: 720 });
     }
 
     playEatGhost() {
-        if (this.muted) return;
-        this.init();
-        if (!this.ctx) return;
+        this.tone(180, 0.35, { type: 'sawtooth', vol: 0.16, slide: 1400 });
+        this.tone(900, 0.12, { type: 'square', vol: 0.06, at: 0.3, slide: 1800 });
+    }
 
-        try {
-            const now = this.ctx.currentTime;
-            const duration = 0.4;
-            const osc = this.ctx.createOscillator();
-            const gain = this.ctx.createGain();
+    playFruit() {
+        [660, 880, 1320].forEach((f, i) => this.tone(f, 0.09, { type: 'square', vol: 0.1, at: i * 0.07 }));
+    }
 
-            osc.type = 'sawtooth';
-            osc.frequency.setValueAtTime(200, now);
-            osc.frequency.exponentialRampToValueAtTime(1200, now + duration);
-
-            gain.gain.setValueAtTime(0.25, now);
-            gain.gain.linearRampToValueAtTime(0.01, now + duration);
-
-            osc.connect(gain);
-            gain.connect(this.ctx.destination);
-
-            osc.start(now);
-            osc.stop(now + duration);
-        } catch (e) {
-            console.error("Failed to play eat ghost sound:", e);
-        }
+    playExtraLife() {
+        [523, 659, 784, 1047, 784, 1047].forEach((f, i) =>
+            this.tone(f, 0.12, { type: 'square', vol: 0.1, at: i * 0.1 }));
     }
 
     playDeath() {
-        if (this.muted) return;
-        this.init();
-        this.stopSiren();
-        this.stopPowerSiren();
-        if (!this.ctx) return;
-
-        try {
-            const now = this.ctx.currentTime;
-            const duration = 1.2;
-            const osc = this.ctx.createOscillator();
-            const gain = this.ctx.createGain();
-
-            osc.type = 'sawtooth';
-            osc.frequency.setValueAtTime(500, now);
-            
-            for (let i = 1; i <= 10; i++) {
-                const timeOffset = (duration / 10) * i;
-                const freq = 500 - (i * 45);
-                osc.frequency.setValueAtTime(freq, now + timeOffset);
-            }
-
-            gain.gain.setValueAtTime(0.25, now);
-            gain.gain.linearRampToValueAtTime(0.01, now + duration);
-
-            osc.connect(gain);
-            gain.connect(this.ctx.destination);
-
-            osc.start(now);
-            osc.stop(now + duration);
-        } catch (e) {
-            console.error("Failed to play death sound:", e);
+        this.setLoop('none');
+        // ゆらぎながら下降する音
+        for (let i = 0; i < 9; i++) {
+            const f = 700 - i * 60;
+            this.tone(f, 0.14, { type: 'square', vol: 0.11, at: i * 0.13, slide: f * 0.7, slideType: 'lin' });
         }
+        // 最後の「ポポン」
+        this.tone(160, 0.12, { type: 'triangle', vol: 0.2, at: 1.25, slide: 60 });
+        this.tone(160, 0.12, { type: 'triangle', vol: 0.2, at: 1.42, slide: 60 });
     }
 
     playLevelComplete() {
-        if (this.muted) return;
-        this.init();
-        this.stopSiren();
-        this.stopPowerSiren();
-        if (!this.ctx) return;
-
-        try {
-            const now = this.ctx.currentTime;
-            const notes = [261.63, 329.63, 392.00, 523.25, 392.00, 523.25];
-            const noteDuration = 0.15;
-
-            notes.forEach((freq, index) => {
-                const osc = this.ctx.createOscillator();
-                const gain = this.ctx.createGain();
-
-                osc.type = 'square';
-                osc.frequency.setValueAtTime(freq, now + index * noteDuration);
-
-                gain.gain.setValueAtTime(0.15, now + index * noteDuration);
-                gain.gain.linearRampToValueAtTime(0.01, now + (index + 1) * noteDuration);
-
-                osc.connect(gain);
-                gain.connect(this.ctx.destination);
-
-                osc.start(now + index * noteDuration);
-                osc.stop(now + (index + 1) * noteDuration);
-            });
-        } catch (e) {
-            console.error("Failed to play level complete sound:", e);
-        }
+        this.setLoop('none');
+        [523, 659, 784, 1047, 784, 1047, 1319].forEach((f, i) =>
+            this.tone(f, 0.14, { type: 'square', vol: 0.1, at: i * 0.12 }));
     }
 
+    /** ゲーム開始ジングル（オリジナル曲・約3.6秒） */
     playStartBGM() {
-        if (this.muted) return;
-        this.init();
-        if (!this.ctx) return;
+        this.setLoop('none');
+        const beat = 0.15;
+        // [周波数, 拍数]  0 は休符
+        const melody = [
+            [523, 1], [659, 1], [784, 1], [1047, 2], [784, 1], [880, 2],
+            [698, 1], [880, 1], [1047, 1], [1175, 2], [1047, 1], [988, 2],
+            [784, 1], [988, 1], [1175, 1], [1319, 2], [1175, 1], [1047, 1], [988, 1],
+            [1047, 4]
+        ];
+        const bass = [131, 131, 175, 175, 196, 196, 131, 131];
+        let t = 0;
+        melody.forEach(([f, b]) => {
+            if (f) this.tone(f, beat * b * 0.9, { type: 'square', vol: 0.08, at: t });
+            t += beat * b;
+        });
+        bass.forEach((f, i) => this.tone(f, beat * 2.6, { type: 'triangle', vol: 0.14, at: i * beat * 3 }));
+    }
 
+    // ---------- ループ音（サイレン / パワー / 目玉） ----------
+    /**
+     * 毎フレーム呼ばれる。種類が変わったときだけ音を作り直す。
+     * kind: 'none' | 'siren' | 'power' | 'eyes'
+     * intensity: 0〜1（残りドットが少ないほど高くなる）
+     */
+    setLoop(kind, intensity = 0) {
+        if (!this.ready) { this.loopKind = 'none'; return; }
+        if (kind !== this.loopKind) {
+            this._stopLoop();
+            this.loopKind = kind;
+            if (kind !== 'none') this._startLoop(kind);
+        }
+        if (kind === 'siren' && this.loop) {
+            const now = this.ctx.currentTime;
+            this.loop.osc.frequency.setTargetAtTime(230 + intensity * 200, now, 0.3);
+            this.loop.lfo.frequency.setTargetAtTime(2.4 + intensity * 2.6, now, 0.3);
+        }
+    }
+
+    _startLoop(kind) {
+        try {
+            const c = this.ctx;
+            const osc = c.createOscillator();
+            const g = c.createGain();
+            const lfo = c.createOscillator();
+            const depth = c.createGain();
+            let vol;
+            if (kind === 'siren') {
+                osc.type = 'triangle'; osc.frequency.value = 230;
+                lfo.type = 'sine'; lfo.frequency.value = 2.4; depth.gain.value = 70; vol = 0.06;
+            } else if (kind === 'power') {
+                osc.type = 'sawtooth'; osc.frequency.value = 320;
+                lfo.type = 'sawtooth'; lfo.frequency.value = 7; depth.gain.value = 140; vol = 0.03;
+            } else { // eyes
+                osc.type = 'square'; osc.frequency.value = 900;
+                lfo.type = 'sine'; lfo.frequency.value = 14; depth.gain.value = 350; vol = 0.025;
+            }
+            lfo.connect(depth);
+            depth.connect(osc.frequency);
+            osc.connect(g);
+            g.connect(this.master);
+            const now = c.currentTime;
+            g.gain.setValueAtTime(0, now);
+            g.gain.linearRampToValueAtTime(vol, now + 0.08);
+            osc.start(now);
+            lfo.start(now);
+            this.loop = { osc, lfo, g };
+        } catch (e) {
+            console.warn('loop start error', e);
+            this.loop = null;
+        }
+    }
+
+    _stopLoop() {
+        if (!this.loop) return;
         try {
             const now = this.ctx.currentTime;
-            const introMelody = [
-                { note: 247.94, dur: 0.1 },
-                { note: 495.88, dur: 0.1 },
-                { note: 369.99, dur: 0.1 },
-                { note: 311.13, dur: 0.1 },
-                { note: 495.88, dur: 0.08 },
-                { note: 369.99, dur: 0.08 },
-                { note: 311.13, dur: 0.15 },
-                
-                { note: 261.63, dur: 0.1 },
-                { note: 523.25, dur: 0.1 },
-                { note: 392.00, dur: 0.1 },
-                { note: 329.63, dur: 0.1 },
-                { note: 523.25, dur: 0.08 },
-                { note: 392.00, dur: 0.08 },
-                { note: 329.63, dur: 0.15 },
-
-                { note: 247.94, dur: 0.1 },
-                { note: 495.88, dur: 0.1 },
-                { note: 369.99, dur: 0.1 },
-                { note: 311.13, dur: 0.1 },
-                { note: 495.88, dur: 0.08 },
-                { note: 369.99, dur: 0.08 },
-                { note: 311.13, dur: 0.15 },
-
-                { note: 311.13, dur: 0.05 },
-                { note: 329.63, dur: 0.05 },
-                { note: 349.23, dur: 0.05 },
-                { note: 369.99, dur: 0.05 },
-                { note: 392.00, dur: 0.05 },
-                { note: 415.30, dur: 0.05 },
-                { note: 440.00, dur: 0.05 },
-                { note: 495.88, dur: 0.15 }
-            ];
-
-            let elapsed = 0;
-            introMelody.forEach((item) => {
-                const osc = this.ctx.createOscillator();
-                const gain = this.ctx.createGain();
-
-                osc.type = 'square';
-                osc.frequency.setValueAtTime(item.note, now + elapsed);
-
-                gain.gain.setValueAtTime(0.12, now + elapsed);
-                gain.gain.linearRampToValueAtTime(0.01, now + elapsed + item.dur);
-
-                osc.connect(gain);
-                gain.connect(this.ctx.destination);
-
-                osc.start(now + elapsed);
-                osc.stop(now + elapsed + item.dur);
-
-                elapsed += item.dur + 0.02;
-            });
-        } catch (e) {
-            console.error("Failed to play start BGM:", e);
-        }
-    }
-
-    startSiren() {
-        if (this.muted) return;
-        this.init();
-        if (this.sirenInterval) return;
-        if (!this.ctx) return;
-
-        this.sirenInterval = setInterval(() => {
-            if (this.muted || !this.ctx) return;
-            try {
-                const now = this.ctx.currentTime;
-                const osc = this.ctx.createOscillator();
-                const gain = this.ctx.createGain();
-
-                osc.type = 'triangle';
-                osc.frequency.setValueAtTime(250, now);
-                osc.frequency.linearRampToValueAtTime(350, now + 0.25);
-                osc.frequency.linearRampToValueAtTime(250, now + 0.5);
-
-                gain.gain.setValueAtTime(0.04, now);
-                gain.gain.linearRampToValueAtTime(0.04, now + 0.4);
-                gain.gain.linearRampToValueAtTime(0.001, now + 0.5);
-
-                osc.connect(gain);
-                gain.connect(this.ctx.destination);
-
-                osc.start(now);
-                osc.stop(now + 0.5);
-            } catch (e) {
-                console.error("Error in siren interval:", e);
-            }
-        }, 500);
-    }
-
-    stopSiren() {
-        if (this.sirenInterval) {
-            clearInterval(this.sirenInterval);
-            this.sirenInterval = null;
-        }
-    }
-
-    startPowerSiren() {
-        if (this.muted) return;
-        this.init();
-        if (this.powerSirenInterval) return;
-        this.stopSiren();
-        if (!this.ctx) return;
-
-        this.powerSirenInterval = setInterval(() => {
-            if (this.muted || !this.ctx) return;
-            try {
-                const now = this.ctx.currentTime;
-                const osc = this.ctx.createOscillator();
-                const gain = this.ctx.createGain();
-
-                osc.type = 'sawtooth';
-                osc.frequency.setValueAtTime(400, now);
-                osc.frequency.linearRampToValueAtTime(600, now + 0.15);
-                osc.frequency.linearRampToValueAtTime(400, now + 0.3);
-
-                gain.gain.setValueAtTime(0.03, now);
-                gain.gain.linearRampToValueAtTime(0.03, now + 0.25);
-                gain.gain.linearRampToValueAtTime(0.001, now + 0.3);
-
-                osc.connect(gain);
-                gain.connect(this.ctx.destination);
-
-                osc.start(now);
-                osc.stop(now + 0.3);
-            } catch (e) {
-                console.error("Error in power siren interval:", e);
-            }
-        }, 300);
-    }
-
-    stopPowerSiren() {
-        if (this.powerSirenInterval) {
-            clearInterval(this.powerSirenInterval);
-            this.powerSirenInterval = null;
-        }
+            const { osc, lfo, g } = this.loop;
+            g.gain.cancelScheduledValues(now);
+            g.gain.setValueAtTime(g.gain.value, now);
+            g.gain.linearRampToValueAtTime(0, now + 0.06);
+            osc.stop(now + 0.08);
+            lfo.stop(now + 0.08);
+        } catch (_) { /* 既に停止済み */ }
+        this.loop = null;
     }
 }
 

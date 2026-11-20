@@ -1,23 +1,35 @@
-// --- ゲームの基本設定 ---
+/* =========================================================
+   PAC-MAN NEON - app.js v2.0.0
+   ========================================================= */
+'use strict';
+(function () {
+
+// ---------------------------------------------------------
+// 基本設定
+// ---------------------------------------------------------
+const T = 16;                 // 1マスのピクセル数
+const COLS = 28;
+const ROWS = 31;
+const W = COLS * T;           // 448
+const H = ROWS * T;           // 496
+const TUNNEL_ROW = 13;
+const BASE_SPEED = 2.5;       // 速度100%のときの移動量(px/フレーム, 60fps基準)
+const FRAME_MS = 1000 / 60;   // 固定タイムステップ（120Hz端末でも速度が変わらない）
+const FONT = '"Press Start 2P", monospace';
+
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
+const audio = window.gameAudio;
 
-const TILE_SIZE = 16;
-const MAP_WIDTH = 28;
-const MAP_HEIGHT = 31;
-
-// 安全なオーディオ再生ヘルパー
-function playSound(methodName, ...args) {
-    if (window.gameAudio && typeof window.gameAudio[methodName] === 'function') {
-        try {
-            window.gameAudio[methodName](...args);
-        } catch (e) {
-            console.error(`Error playing sound ${methodName}:`, e);
-        }
+function sfx(name, ...args) {
+    try {
+        if (audio && typeof audio[name] === 'function') audio[name](...args);
+    } catch (e) {
+        console.warn('sound error:', name, e);
     }
 }
 
-// タイルマップ定義 (0:空, 1:壁, 2:ドット, 3:パワーエサ, 4:ゲート, 5:ゴーストハウス)
+// タイルマップ (0:空, 1:壁, 2:ドット, 3:パワーエサ, 4:ゲート, 5:ゴーストハウス)
 const ORIGINAL_MAP = [
     [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
     [1,3,2,2,2,2,2,2,2,2,2,2,2,1,1,2,2,2,2,2,2,2,2,2,2,2,3,1],
@@ -52,1079 +64,1286 @@ const ORIGINAL_MAP = [
     [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
 ];
 
-let map = JSON.parse(JSON.stringify(ORIGINAL_MAP));
+const cloneMap = () => ORIGINAL_MAP.map(row => row.slice());
+let map = cloneMap();
 
-// 方向の定義
-const DIR_UP = { x: 0, y: -1, angle: 1.5 * Math.PI, name: 'up' };
-const DIR_DOWN = { x: 0, y: 1, angle: 0.5 * Math.PI, name: 'down' };
-const DIR_LEFT = { x: -1, y: 0, angle: Math.PI, name: 'left' };
-const DIR_RIGHT = { x: 1, y: 0, angle: 0, name: 'right' };
-const DIR_NONE = { x: 0, y: 0, angle: 0, name: 'none' };
+// 方向
+const DIR = {
+    up:    { x: 0,  y: -1, name: 'up',    angle: -Math.PI / 2 },
+    down:  { x: 0,  y: 1,  name: 'down',  angle: Math.PI / 2 },
+    left:  { x: -1, y: 0,  name: 'left',  angle: Math.PI },
+    right: { x: 1,  y: 0,  name: 'right', angle: 0 }
+};
+const DIR_ORDER = [DIR.up, DIR.left, DIR.down, DIR.right]; // 同距離のときの優先順
+const OPPOSITE = { up: DIR.down, down: DIR.up, left: DIR.right, right: DIR.left };
+const opposite = d => OPPOSITE[d.name];
 
-// ゲーム状態
-const STATE_START = 'start';
-const STATE_PLAY = 'play';
-const STATE_PAUSE = 'pause';
-const STATE_DEATH = 'death';
-const STATE_CLEAR = 'clear';
-const STATE_OVER = 'over';
+// 主要座標
+const GATE_X = 14 * T;              // ゲート中央（13列と14列の境目）
+const OUTSIDE_Y = 10 * T + T / 2;   // ゲートの真上の通路
+const HOUSE_Y = 13 * T + T / 2;     // 巣の中央
+const PAC_START = { x: 14 * T, y: 23 * T + T / 2 };
+const FRUIT_POS = { x: 14 * T, y: 16 * T + T / 2 };
+const MSG_Y = 16 * T + T / 2 + 5;   // READY! などの表示位置
 
-let gameState = STATE_START;
-let score = 0;
-let highScore = 0;
-let level = 1;
-let lives = 3;
-let totalDots = 0;
-let dotsEaten = 0;
-let globalTimer = 0;
-
-// イジケモードの管理
-let frightenedTimer = 0;
-let frightenedDuration = 600; // フレーム数 (約10秒)
-let ghostEatenMultiplier = 1; // 連続で食べた時のスコア倍率
-
-// フローティングスコア（+200などの文字アニメーション）の管理用配列
-let floatingScores = [];
-
-// ハイスコア読み込み
-try {
-    if (localStorage.getItem('pacman_neon_highscore')) {
-        highScore = parseInt(localStorage.getItem('pacman_neon_highscore'));
-        document.getElementById('highscore').innerText = String(highScore).padStart(6, '0');
-    }
-} catch (e) {
-    console.warn("LocalStorage is not available:", e);
+// ---------------------------------------------------------
+// マップ補助関数
+// ---------------------------------------------------------
+function tileAt(c, r) {
+    if (r === TUNNEL_ROW && (c === -1 || c === COLS)) return 0; // トンネルの画面外1マス
+    if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return 1;
+    return map[r][c];
+}
+function walkable(c, r) {
+    const t = tileAt(c, r);
+    return t !== 1 && t !== 4 && t !== 5;
+}
+const tileOf = v => Math.floor(v / T);
+const centerOf = v => tileOf(v) * T + T / 2;
+const EPS = 1e-6;
+function atCenter(e) {
+    return Math.abs(e.x - centerOf(e.x)) < EPS && Math.abs(e.y - centerOf(e.y)) < EPS;
+}
+function countDots() {
+    let n = 0;
+    for (const row of map) for (const t of row) if (t === 2 || t === 3) n++;
+    return n;
 }
 
-// --- キャラクターの定義 ---
+/**
+ * 移動エンジン：どんな速度でも必ずマスの中心を通過し、そこで進路を決める。
+ * （旧版は速度変更時に中心とずれ、ゴーストが壁をすり抜けていた）
+ * decide(e) は中心で呼ばれ、false を返すとその場で停止する。
+ */
+function advance(e, dist, decide) {
+    let remaining = dist;
+    for (let guard = 0; guard < 10 && remaining > EPS; guard++) {
+        if (atCenter(e)) {
+            e.x = centerOf(e.x);
+            e.y = centerOf(e.y);
+            // ワープトンネル（画面外の1マスで反対側へ）
+            const c = tileOf(e.x);
+            if (c < 0 && e.dir === DIR.left) e.x += (COLS + 1) * T;
+            else if (c >= COLS && e.dir === DIR.right) e.x -= (COLS + 1) * T;
+            if (!decide(e)) { e.moving = false; return; }
+        }
+        const d = e.dir;
+        if (d.x !== 0) {
+            const c = centerOf(e.x);
+            const target = d.x > 0 ? (c > e.x + EPS ? c : c + T) : (c < e.x - EPS ? c : c - T);
+            const span = Math.abs(target - e.x);
+            if (remaining >= span) { e.x = target; remaining -= span; }
+            else { e.x += d.x * remaining; remaining = 0; }
+        } else {
+            const c = centerOf(e.y);
+            const target = d.y > 0 ? (c > e.y + EPS ? c : c + T) : (c < e.y - EPS ? c : c - T);
+            const span = Math.abs(target - e.y);
+            if (remaining >= span) { e.y = target; remaining -= span; }
+            else { e.y += d.y * remaining; remaining = 0; }
+        }
+    }
+    e.moving = true;
+}
 
-// 1. パックマン
+function moveToward(cur, target, step) {
+    if (Math.abs(target - cur) <= step) return target;
+    return cur + Math.sign(target - cur) * step;
+}
+
+// ---------------------------------------------------------
+// レベル設定
+// ---------------------------------------------------------
+const FRUITS = [
+    { kind: 'cherry', pts: 100 },
+    { kind: 'strawberry', pts: 300 },
+    { kind: 'orange', pts: 500 },
+    { kind: 'orange', pts: 500 },
+    { kind: 'apple', pts: 700 },
+    { kind: 'apple', pts: 700 },
+    { kind: 'melon', pts: 1000 },
+    { kind: 'melon', pts: 1000 },
+    { kind: 'grapes', pts: 2000 },
+    { kind: 'grapes', pts: 2000 },
+    { kind: 'bell', pts: 3000 },
+    { kind: 'bell', pts: 3000 },
+    { kind: 'key', pts: 5000 }
+];
+const fruitFor = n => FRUITS[Math.min(n, FRUITS.length) - 1];
+
+function levelSpec(n) {
+    const frightSecs = [6, 5, 4, 3, 2, 5, 2, 2, 1, 5, 2, 1, 1, 3, 1, 1, 1, 1];
+    const fs = n <= frightSecs.length ? frightSecs[n - 1] : 1;
+    const tier = n === 1 ? 0 : (n <= 4 ? 1 : 2);
+    const elroy1 = [20, 30, 40, 40, 40, 50, 50, 50, 60, 60, 60, 80][Math.min(n, 12) - 1];
+    return {
+        pac:         BASE_SPEED * [0.80, 0.90, 1.00][tier],
+        pacFright:   BASE_SPEED * [0.90, 0.95, 1.00][tier],
+        ghost:       BASE_SPEED * [0.75, 0.85, 0.95][tier],
+        ghostFright: BASE_SPEED * [0.50, 0.55, 0.60][tier],
+        ghostTunnel: BASE_SPEED * [0.40, 0.45, 0.50][tier],
+        frightFrames: fs * 60,
+        flashFrames: Math.min(fs * 60, 120),
+        // 秒数：偶数番目=散開(scatter) 奇数番目=追跡(chase)
+        schedule: tier === 0 ? [7, 20, 7, 20, 5, 20, 5, Infinity]
+                : tier === 1 ? [7, 20, 7, 20, 5, 60, 1, Infinity]
+                : [5, 20, 5, 20, 5, 60, 1, Infinity],
+        // 巣から出るのに必要なドット数（累計）[Blinky, Pinky, Inky, Clyde]
+        dotLimits: n === 1 ? [0, 0, 30, 90] : n === 2 ? [0, 0, 0, 50] : [0, 0, 0, 0],
+        idleLimit: n < 5 ? 240 : 180,
+        elroy1,
+        elroy2: Math.floor(elroy1 / 2)
+    };
+}
+const LIFE_LOST_LIMITS = [0, 7, 17, 32];
+
+// ---------------------------------------------------------
+// ゲーム状態
+// ---------------------------------------------------------
+let state = 'start';        // start | ready | play | pause | dying | clear | over
+let pausedFrom = null;
+let stateTimer = 0;
+let globalTimer = 0;
+
+let score = 0;
+let highScore = 0;
+let newRecord = false;
+let level = 1;
+let lives = 3;
+let extraLifeGiven = false;
+let lv = levelSpec(1);
+
+let totalDots = countDots();
+let dotsEaten = 0;
+let lifeDots = 0;
+let lifeLost = false;
+let idleTimer = 0;
+
+let frightTimer = 0;
+let ghostCombo = 0;
+let modePhase = 0;
+let modeTimer = 0;
+let globalMode = 'scatter';
+
+let freezeTimer = 0;        // ゴーストを食べた瞬間の一時停止
+let frozenGhost = null;
+let fruit = null;
+let popups = [];
+let particles = [];
+
+try {
+    highScore = parseInt(localStorage.getItem('pacman_neon_highscore'), 10) || 0;
+} catch (_) { /* localStorage 不可 */ }
+
+function saveHighScore() {
+    try { localStorage.setItem('pacman_neon_highscore', String(highScore)); } catch (_) {}
+}
+
+// ---------------------------------------------------------
+// パックマン
+// ---------------------------------------------------------
 const pacman = {
-    x: 14 * TILE_SIZE + TILE_SIZE / 2,
-    y: 23 * TILE_SIZE + TILE_SIZE / 2,
-    gridX: 14,
-    gridY: 23,
-    speed: 2,
-    dir: DIR_LEFT,
-    nextDir: DIR_LEFT,
-    mouthAngle: 0.2,
-    mouthClosing: false,
-    color: '#ffe600',
-    
+    x: PAC_START.x, y: PAC_START.y,
+    dir: DIR.left, nextDir: DIR.left,
+    moving: true, animT: 0, freeze: 0,
+
     reset() {
-        this.gridX = 14;
-        this.gridY = 23;
-        this.x = this.gridX * TILE_SIZE + TILE_SIZE / 2;
-        this.y = this.gridY * TILE_SIZE + TILE_SIZE / 2;
-        this.dir = DIR_LEFT;
-        this.nextDir = DIR_LEFT;
-        this.mouthAngle = 0.2;
-        this.mouthClosing = false;
+        this.x = PAC_START.x;
+        this.y = PAC_START.y;
+        this.dir = DIR.left;
+        this.nextDir = DIR.left;
+        this.moving = true;
+        this.animT = 4;
+        this.freeze = 0;
     },
 
     update() {
-        // グリッドに完全に揃っているかチェック
-        const isAligned = (this.x - TILE_SIZE / 2) % TILE_SIZE === 0 && (this.y - TILE_SIZE / 2) % TILE_SIZE === 0;
-
-        if (isAligned) {
-            this.gridX = Math.round((this.x - TILE_SIZE / 2) / TILE_SIZE);
-            this.gridY = Math.round((this.y - TILE_SIZE / 2) / TILE_SIZE);
-
-            // トンネルの処理
-            if (this.gridX < 0) {
-                this.gridX = MAP_WIDTH - 1;
-                this.x = this.gridX * TILE_SIZE + TILE_SIZE / 2;
-            } else if (this.gridX >= MAP_WIDTH) {
-                this.gridX = 0;
-                this.x = this.gridX * TILE_SIZE + TILE_SIZE / 2;
-            }
-
-            // 先行入力方向が移動可能か確認
-            if (canMove(this.gridX, this.gridY, this.nextDir, false)) {
-                this.dir = this.nextDir;
-            }
-        }
-
-        // 現在の方向に進めるか確認
-        const nextGridX = this.gridX + this.dir.x;
-        const nextGridY = this.gridY + this.dir.y;
-        
-        let shouldMove = true;
-        if (isAligned) {
-            if (!canMove(this.gridX, this.gridY, this.dir, false)) {
-                shouldMove = false;
-            }
-        }
-
-        if (shouldMove) {
-            this.x += this.dir.x * this.speed;
-            this.y += this.dir.y * this.speed;
-
-            // アニメーション (口の開閉)
-            if (this.mouthClosing) {
-                this.mouthAngle -= 0.03;
-                if (this.mouthAngle <= 0.01) {
-                    this.mouthAngle = 0.01;
-                    this.mouthClosing = false;
-                }
-            } else {
-                this.mouthAngle += 0.03;
-                if (this.mouthAngle >= 0.4) {
-                    this.mouthAngle = 0.4;
-                    this.mouthClosing = true;
-                }
-            }
-        } else {
-            this.mouthAngle = 0.2; // 停止時は口を少し開ける
-        }
-    },
-
-    draw() {
-        ctx.save();
-        ctx.translate(this.x, this.y);
-        // パックマンの向きに合わせて回転
-        ctx.rotate(this.dir.angle);
-
-        // ネオン風グローエフェクト
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = this.color;
-
-        ctx.fillStyle = this.color;
-        ctx.beginPath();
-        
-        // 口を開けた扇形を描画
-        ctx.arc(0, 0, TILE_SIZE / 2 - 1, this.mouthAngle * Math.PI, (2 - this.mouthAngle) * Math.PI);
-        ctx.lineTo(0, 0);
-        ctx.closePath();
-        ctx.fill();
-
-        ctx.restore();
+        if (this.freeze > 0) { this.freeze--; return; }
+        // 逆方向へはいつでも即座に切り返せる
+        if (this.nextDir === opposite(this.dir)) this.dir = this.nextDir;
+        const sp = frightTimer > 0 ? lv.pacFright : lv.pac;
+        advance(this, sp, pacDecide);
+        if (this.moving) this.animT += sp;
     }
 };
 
-// 2. ゴーストクラス
+function pacDecide(e) {
+    const c = tileOf(e.x), r = tileOf(e.y);
+    if (walkable(c + e.nextDir.x, r + e.nextDir.y)) e.dir = e.nextDir;
+    return walkable(c + e.dir.x, r + e.dir.y);
+}
+
+// ---------------------------------------------------------
+// ゴースト
+// ---------------------------------------------------------
 class Ghost {
-    constructor(name, color, scatterX, scatterY, homeGridX, homeGridY, dotLimit) {
+    constructor(name, color, idx, scatter, homeX) {
         this.name = name;
         this.color = color;
-        
-        // 初期位置とターゲット
-        this.homeX = homeGridX * TILE_SIZE + TILE_SIZE / 2;
-        this.homeY = homeGridY * TILE_SIZE + TILE_SIZE / 2;
-        this.scatterTarget = { x: scatterX, y: scatterY };
-        this.dotLimit = dotLimit; // 巣から出るために必要な捕食ドット数
-        
+        this.idx = idx;
+        this.scatter = scatter;
+        this.homeX = homeX;
         this.reset();
     }
 
     reset() {
-        this.x = this.homeX;
-        this.y = this.homeY;
-        this.gridX = Math.round((this.x - TILE_SIZE / 2) / TILE_SIZE);
-        this.gridY = Math.round((this.y - TILE_SIZE / 2) / TILE_SIZE);
-        this.dir = DIR_UP;
-        this.speed = 2;
-        
-        // 状態: 'house' (巣の中), 'exit' (脱出中), 'chase', 'scatter', 'frightened', 'eaten'
-        this.mode = 'house';
-        
-        // Blinky(赤)は最初から外にいる
-        if (this.name === 'Blinky') {
-            this.mode = 'scatter';
-            this.y = 11 * TILE_SIZE + TILE_SIZE / 2;
-            this.gridY = 11;
+        this.frightened = false;
+        this.reverse = false;
+        this.anim = Math.random() * 100 | 0;
+        this.moving = true;
+        if (this.idx === 0) {
+            this.mode = 'active';
+            this.x = GATE_X;
+            this.y = OUTSIDE_Y;
+            this.dir = DIR.left;
+        } else {
+            // mode: house(巣で待機) / exit(脱出中) / active(迷路内) / eaten(目玉で帰還) / enter(巣へ入る)
+            this.mode = 'house';
+            this.x = this.homeX;
+            this.y = HOUSE_Y + (this.idx === 1 ? 0 : (this.idx === 2 ? -4 : 4));
+            this.dir = this.idx === 2 ? DIR.down : DIR.up;
         }
+    }
 
-        this.target = { x: 0, y: 0 };
-        this.animationFrame = 0;
+    get isEyes() {
+        return this.mode === 'eaten' || this.mode === 'enter';
+    }
+
+    isElroy() {
+        if (this.idx !== 0) return 0;
+        const left = totalDots - dotsEaten;
+        if (left <= lv.elroy2) return 2;
+        if (left <= lv.elroy1) return 1;
+        return 0;
+    }
+
+    speed() {
+        if (this.isEyes) return 4;
+        if (this.mode === 'house' || this.mode === 'exit') return 0.9;
+        const c = tileOf(this.x), r = tileOf(this.y);
+        if (r === TUNNEL_ROW && (c <= 5 || c >= 22)) return lv.ghostTunnel;
+        if (this.frightened) return lv.ghostFright;
+        const e = this.isElroy();
+        return lv.ghost * (e === 2 ? 1.1 : e === 1 ? 1.05 : 1);
     }
 
     update() {
-        this.animationFrame++;
-        
-        // モード別の速度調整
-        if (this.mode === 'frightened') {
-            this.speed = 1; // イジケ中は遅い
-        } else if (this.mode === 'eaten') {
-            this.speed = 4; // 食べられた目は超高速
-        } else {
-            this.speed = 2; // 通常速度
-        }
+        this.anim++;
+        const sp = this.speed();
+        switch (this.mode) {
+            case 'house':
+                this.y += this.dir.y * sp * 0.6;
+                if (this.y <= HOUSE_Y - 5) { this.y = HOUSE_Y - 5; this.dir = DIR.down; }
+                else if (this.y >= HOUSE_Y + 5) { this.y = HOUSE_Y + 5; this.dir = DIR.up; }
+                break;
 
-        const isAligned = (this.x - TILE_SIZE / 2) % TILE_SIZE === 0 && (this.y - TILE_SIZE / 2) % TILE_SIZE === 0;
-
-        if (isAligned) {
-            this.gridX = Math.round((this.x - TILE_SIZE / 2) / TILE_SIZE);
-            this.gridY = Math.round((this.y - TILE_SIZE / 2) / TILE_SIZE);
-
-            // トンネルの処理
-            if (this.gridX < 0) {
-                this.gridX = MAP_WIDTH - 1;
-                this.x = this.gridX * TILE_SIZE + TILE_SIZE / 2;
-            } else if (this.gridX >= MAP_WIDTH) {
-                this.gridX = 0;
-                this.x = this.gridX * TILE_SIZE + TILE_SIZE / 2;
-            }
-
-            // 巣からの脱出処理
-            if (this.mode === 'house') {
-                if (dotsEaten >= this.dotLimit || globalTimer > 300) {
-                    this.mode = 'exit';
+            case 'exit':
+                if (Math.abs(this.x - GATE_X) > EPS && Math.abs(this.y - HOUSE_Y) > EPS) {
+                    this.dir = this.y > HOUSE_Y ? DIR.up : DIR.down;
+                    this.y = moveToward(this.y, HOUSE_Y, sp);
+                } else if (Math.abs(this.x - GATE_X) > EPS) {
+                    this.dir = this.x < GATE_X ? DIR.right : DIR.left;
+                    this.x = moveToward(this.x, GATE_X, sp);
                 } else {
-                    // 巣の中での上下運動
-                    if (this.gridY === 13) this.dir = DIR_UP;
-                    if (this.gridY === 15) this.dir = DIR_DOWN;
+                    this.dir = DIR.up;
+                    this.y = moveToward(this.y, OUTSIDE_Y, sp);
+                    if (this.y === OUTSIDE_Y) {
+                        this.mode = 'active';
+                        this.dir = DIR.left;
+                        this.reverse = false;
+                    }
                 }
-            }
+                break;
 
-            if (this.mode === 'exit') {
-                // 巣のゲートに向かって直進
-                this.target = { x: 14, y: 11 };
-                if (this.gridX < 14) this.dir = DIR_RIGHT;
-                else if (this.gridX > 14) this.dir = DIR_LEFT;
-                else if (this.gridY > 11) this.dir = DIR_UP;
-                
-                if (this.gridX === 14 && this.gridY === 11) {
-                    this.mode = 'scatter';
-                    this.dir = DIR_LEFT;
-                }
-            } else if (this.mode === 'eaten') {
-                // 巣に戻ったら復活
-                if (this.gridX === 14 && this.gridY === 14) {
-                    this.mode = 'exit';
+            case 'enter':
+                if (Math.abs(this.x - GATE_X) > EPS) {
+                    this.x = moveToward(this.x, GATE_X, sp);
                 } else {
-                    this.target = { x: 14, y: 14 };
-                    this.dir = this.getNextDirection();
+                    this.dir = DIR.down;
+                    this.y = moveToward(this.y, HOUSE_Y, sp);
+                    if (this.y === HOUSE_Y) {
+                        this.mode = 'exit';   // 巣に戻って復活
+                        this.frightened = false;
+                    }
                 }
-            } else if (this.mode === 'frightened') {
-                // ランダム移動
-                this.dir = this.getRandomDirection();
-            } else {
-                // 通常追跡または散開モード
-                this.updateTarget();
-                this.dir = this.getNextDirection();
-            }
-        }
+                break;
 
-        // 移動
-        this.x += this.dir.x * this.speed;
-        this.y += this.dir.y * this.speed;
+            default: // active / eaten
+                advance(this, sp, g => g.decide());
+        }
     }
 
-    updateTarget() {
-        // 各ゴーストの行動特性
-        if (this.mode === 'scatter') {
-            this.target = this.scatterTarget;
-            return;
+    decide() {
+        const c = tileOf(this.x), r = tileOf(this.y);
+
+        // 目玉がゲート上に着いたら巣へ入る
+        if (this.mode === 'eaten' && r === 10 && (c === 13 || c === 14)) {
+            this.mode = 'enter';
+            return false;
         }
 
-        // CHASE モード
-        switch(this.name) {
+        // モード切替時の反転
+        if (this.reverse) {
+            this.reverse = false;
+            const o = opposite(this.dir);
+            if (walkable(c + o.x, r + o.y)) { this.dir = o; return true; }
+        }
+
+        const back = opposite(this.dir);
+        const options = DIR_ORDER.filter(d => d !== back && walkable(c + d.x, r + d.y));
+        if (options.length === 0) { this.dir = back; return true; }
+
+        // イジケ中はランダム
+        if (this.frightened && this.mode === 'active') {
+            this.dir = options[Math.floor(Math.random() * options.length)];
+            return true;
+        }
+
+        const t = this.mode === 'eaten' ? { x: 13.5, y: 10 } : this.target();
+        let best = options[0], bestD = Infinity;
+        for (const d of options) {
+            const dx = c + d.x - t.x, dy = r + d.y - t.y;
+            const dd = dx * dx + dy * dy;
+            if (dd < bestD - EPS) { bestD = dd; best = d; }
+        }
+        this.dir = best;
+        return true;
+    }
+
+    target() {
+        const pc = tileOf(pacman.x), pr = tileOf(pacman.y), pd = pacman.dir;
+        if (globalMode === 'scatter' && this.isElroy() === 0) return this.scatter;
+
+        switch (this.name) {
             case 'Blinky': // 赤：直接追跡
-                this.target = { x: pacman.gridX, y: pacman.gridY };
-                break;
-
-            case 'Pinky': // ピンク：4マス先回り
-                this.target = {
-                    x: pacman.gridX + pacman.dir.x * 4,
-                    y: pacman.gridY + pacman.dir.y * 4
-                };
-                // バグ再現：上を向いているときは左にも4マスずれる
-                if (pacman.dir === DIR_UP) {
-                    this.target.x -= 4;
-                }
-                break;
-
-            case 'Inky': // 水色：BlinkyとPacmanの連動
-                const pX = pacman.gridX + pacman.dir.x * 2;
-                const pY = pacman.gridY + pacman.dir.y * 2;
-                if (pacman.dir === DIR_UP) pX -= 2;
-
-                const blinky = ghosts[0];
-                this.target = {
-                    x: pX + (pX - blinky.gridX),
-                    y: pY + (pY - blinky.gridY)
-                };
-                break;
-
-            case 'Clyde': // オレンジ：きまぐれ（距離8以内で逃走、外で追跡）
-                const dist = Math.hypot(this.gridX - pacman.gridX, this.gridY - pacman.gridY);
-                if (dist > 8) {
-                    this.target = { x: pacman.gridX, y: pacman.gridY };
-                } else {
-                    this.target = this.scatterTarget;
-                }
-                break;
-        }
-    }
-
-    getNextDirection() {
-        // 次の交差点でターゲットに最も近づく方向を選択
-        // 戻る方向は禁止
-        const opposite = getOppositeDirection(this.dir);
-        const directions = [DIR_UP, DIR_LEFT, DIR_DOWN, DIR_RIGHT];
-        let bestDir = this.dir;
-        let minDistance = Infinity;
-
-        directions.forEach(d => {
-            if (d.name === opposite.name) return; // Uターン禁止
-
-            // 壁チェック (ゴーストハウスのゲートは eaten と exit モード時のみ通過可能)
-            const isGateAllowed = (this.mode === 'eaten' || this.mode === 'exit');
-            if (canMove(this.gridX, this.gridY, d, isGateAllowed)) {
-                const nextX = this.gridX + d.x;
-                const nextY = this.gridY + d.y;
-                const distance = Math.hypot(nextX - this.target.x, nextY - this.target.y);
-                
-                if (distance < minDistance) {
-                    minDistance = distance;
-                    bestDir = d;
-                }
+                return { x: pc, y: pr };
+            case 'Pinky': { // ピンク：4マス先回り（上向き時は元祖同様に左へずれる）
+                const ox = pd === DIR.up ? -4 : 0;
+                return { x: pc + pd.x * 4 + ox, y: pr + pd.y * 4 };
             }
-        });
-
-        return bestDir;
-    }
-
-    getRandomDirection() {
-        const opposite = getOppositeDirection(this.dir);
-        const directions = [DIR_UP, DIR_LEFT, DIR_DOWN, DIR_RIGHT];
-        const validDirs = [];
-
-        directions.forEach(d => {
-            if (d.name === opposite.name) return;
-            if (canMove(this.gridX, this.gridY, d, false)) {
-                validDirs.push(d);
+            case 'Inky': { // 水色：Blinkyとの挟み撃ち
+                const ax = pc + pd.x * 2 + (pd === DIR.up ? -2 : 0);
+                const ay = pr + pd.y * 2;
+                const b = ghosts[0];
+                return { x: 2 * ax - tileOf(b.x), y: 2 * ay - tileOf(b.y) };
             }
-        });
-
-        if (validDirs.length > 0) {
-            return validDirs[Math.floor(Math.random() * validDirs.length)];
+            default: { // オレンジ：8マス以内に近づくと縄張りへ逃げる
+                const dx = tileOf(this.x) - pc, dy = tileOf(this.y) - pr;
+                return dx * dx + dy * dy > 64 ? { x: pc, y: pr } : this.scatter;
+            }
         }
-        return opposite; // 行き止まりならUターン
     }
 
     draw() {
+        const R = 7.2;
         ctx.save();
         ctx.translate(this.x, this.y);
 
-        // ネオンカラーの決定
-        let bodyColor = this.color;
-        let isFlickering = false;
-
-        if (this.mode === 'frightened') {
-            const timeLeft = frightenedTimer;
-            // 終了直前の2秒間（120フレーム）点滅
-            if (timeLeft < 120 && Math.floor(timeLeft / 10) % 2 === 0) {
-                bodyColor = '#ffffff'; // 点滅時の白
+        if (!this.isEyes) {
+            let body = this.color;
+            if (this.frightened) {
+                const flash = frightTimer < lv.flashFrames && Math.floor(frightTimer / 12) % 2 === 0;
+                body = flash ? '#f2f2ff' : '#2a3dff';
+            }
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = body;
+            ctx.fillStyle = body;
+            ctx.beginPath();
+            ctx.arc(0, -1, R, Math.PI, 0);
+            const f = Math.floor(this.anim / 7) % 2;
+            if (f === 0) {
+                ctx.lineTo(R, R);
+                ctx.lineTo(R * 0.5, R - 3.5);
+                ctx.lineTo(0, R);
+                ctx.lineTo(-R * 0.5, R - 3.5);
+                ctx.lineTo(-R, R);
             } else {
-                bodyColor = '#0055ff'; // イジケ時の青
+                ctx.lineTo(R, R - 2);
+                ctx.lineTo(R * 0.72, R);
+                ctx.lineTo(R * 0.25, R - 3.5);
+                ctx.lineTo(-R * 0.25, R);
+                ctx.lineTo(-R * 0.72, R - 3.5);
+                ctx.lineTo(-R, R);
+            }
+            ctx.closePath();
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+            if (this.frightened) {
+                const flash = frightTimer < lv.flashFrames && Math.floor(frightTimer / 12) % 2 === 0;
+                const face = flash ? '#ff2244' : '#ffd6b0';
+                ctx.fillStyle = face;
+                ctx.fillRect(-3.5, -3.5, 2.2, 2.2);
+                ctx.fillRect(1.3, -3.5, 2.2, 2.2);
+                ctx.strokeStyle = face;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(-5, 3);
+                for (let i = 0; i < 5; i++) ctx.lineTo(-5 + (i + 1) * 2, i % 2 === 0 ? 1.5 : 3);
+                ctx.stroke();
+                ctx.restore();
+                return;
             }
         }
 
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = bodyColor;
-
-        if (this.mode !== 'eaten') {
-            // ゴーストの体の描画
-            ctx.fillStyle = bodyColor;
-            ctx.beginPath();
-            // 頭部の半円
-            ctx.arc(0, -2, TILE_SIZE / 2 - 1, Math.PI, 0, false);
-            // 胴体
-            ctx.lineTo(TILE_SIZE / 2 - 1, TILE_SIZE / 2 - 2);
-            
-            // 足元のウネウネ（波のアニメーション）
-            const waveOffset = Math.sin(this.animationFrame * 0.15) * 2;
-            ctx.lineTo(TILE_SIZE / 4, TILE_SIZE / 2 - 4 + waveOffset);
-            ctx.lineTo(0, TILE_SIZE / 2 - 2 - waveOffset);
-            ctx.lineTo(-TILE_SIZE / 4, TILE_SIZE / 2 - 4 + waveOffset);
-            ctx.lineTo(-(TILE_SIZE / 2 - 1), TILE_SIZE / 2 - 2);
-            
-            ctx.closePath();
-            ctx.fill();
-        }
-
-        // 目の描画（通常時＆イジケ時＆食べられた時共通）
-        if (this.mode === 'frightened') {
-            // イジケ目の描画（怯えた表情の小さな目）
-            ctx.fillStyle = '#ffb852'; // オレンジ色の怒り眉/悲しい目
-            ctx.fillRect(-4, -4, 2, 2);
-            ctx.fillRect(2, -4, 2, 2);
-            // 波打つ口
-            ctx.strokeStyle = '#ffb852';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(-4, 2);
-            ctx.lineTo(-2, 0);
-            ctx.lineTo(0, 2);
-            ctx.lineTo(2, 0);
-            ctx.lineTo(4, 2);
-            ctx.stroke();
-        } else {
-            // 通常の目（白目と黒目。向いている方向に視線が動く）
-            ctx.fillStyle = '#ffffff';
-            ctx.beginPath();
-            ctx.arc(-3, -3, 3, 0, 2 * Math.PI);
-            ctx.arc(3, -3, 3, 0, 2 * Math.PI);
-            ctx.fill();
-
-            ctx.fillStyle = '#0000ff';
-            ctx.beginPath();
-            // 視線のオフセット
-            const dx = this.dir.x * 1.5;
-            const dy = this.dir.y * 1.5;
-            ctx.arc(-3 + dx, -3 + dy, 1.5, 0, 2 * Math.PI);
-            ctx.arc(3 + dx, -3 + dy, 1.5, 0, 2 * Math.PI);
-            ctx.fill();
-        }
-
+        // 目（進行方向を見る）
+        const dx = this.dir.x * 1.6, dy = this.dir.y * 1.6;
+        ctx.fillStyle = '#ffffff';
+        if (this.isEyes) { ctx.shadowBlur = 6; ctx.shadowColor = '#9fd8ff'; }
+        ctx.beginPath();
+        ctx.ellipse(-3 + dx * 0.5, -2 + dy * 0.5, 2.5, 3.1, 0, 0, Math.PI * 2);
+        ctx.ellipse(3 + dx * 0.5, -2 + dy * 0.5, 2.5, 3.1, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#1430ff';
+        ctx.beginPath();
+        ctx.arc(-3 + dx, -2 + dy, 1.5, 0, Math.PI * 2);
+        ctx.arc(3 + dx, -2 + dy, 1.5, 0, Math.PI * 2);
+        ctx.fill();
         ctx.restore();
     }
 }
 
-// ゴーストのインスタンス作成
 const ghosts = [
-    // Blinky (赤): 散開ターゲット右上, 初期位置 (14, 11), ドット制限 0
-    new Ghost('Blinky', '#ff3333', MAP_WIDTH - 2, -2, 14, 11, 0),
-    // Pinky (ピンク): 散開ターゲット左上, 初期位置 (14, 14), ドット制限 0
-    new Ghost('Pinky', '#ffb8ff', 2, -2, 14, 14, 0),
-    // Inky (水色): 散開ターゲット右下, 初期位置 (12, 14), ドット制限 30
-    new Ghost('Inky', '#00ffff', MAP_WIDTH - 1, MAP_HEIGHT + 2, 12, 14, 30),
-    // Clyde (オレンジ): 散開ターゲット左下, 初期位置 (16, 14), ドット制限 60
-    new Ghost('Clyde', '#ffb852', 0, MAP_HEIGHT + 2, 16, 14, 60)
+    new Ghost('Blinky', '#ff3355', 0, { x: 25, y: -3 }, GATE_X),
+    new Ghost('Pinky',  '#ffb8ff', 1, { x: 2,  y: -3 }, GATE_X),
+    new Ghost('Inky',   '#00ffff', 2, { x: 27, y: 31 }, GATE_X - 2 * T),
+    new Ghost('Clyde',  '#ffb852', 3, { x: 0,  y: 31 }, GATE_X + 2 * T)
 ];
 
-// --- ヘルパー関数 ---
-
-// 反対方向を取得
-function getOppositeDirection(dir) {
-    if (dir === DIR_UP) return DIR_DOWN;
-    if (dir === DIR_DOWN) return DIR_UP;
-    if (dir === DIR_LEFT) return DIR_RIGHT;
-    if (dir === DIR_RIGHT) return DIR_LEFT;
-    return DIR_NONE;
+// ---------------------------------------------------------
+// 進行処理
+// ---------------------------------------------------------
+function addScore(n) {
+    score += n;
+    if (!extraLifeGiven && score >= 10000) {
+        extraLifeGiven = true;
+        lives++;
+        sfx('playExtraLife');
+        popups.push({ x: pacman.x, y: pacman.y - 10, text: '1UP!', color: '#7dff6a', t: 90 });
+    }
+    if (score > highScore) {
+        highScore = score;
+        newRecord = true;
+    }
 }
 
-// 移動可能か判定
-function canMove(gridX, gridY, dir, isGateAllowed) {
-    const nextX = gridX + dir.x;
-    const nextY = gridY + dir.y;
-
-    // トンネル部ははみ出し移動OK
-    if (nextY === 13 && (nextX < 0 || nextX >= MAP_WIDTH)) {
-        return true;
-    }
-
-    if (nextX < 0 || nextX >= MAP_WIDTH || nextY < 0 || nextY >= MAP_HEIGHT) {
-        return false;
-    }
-
-    const tile = map[nextY][nextX];
-    
-    if (tile === 1) return false; // 壁
-    if (tile === 4) return isGateAllowed; // 巣のゲート
-    return true;
+function resetActors() {
+    pacman.reset();
+    ghosts.forEach(g => g.reset());
+    frightTimer = 0;
+    ghostCombo = 0;
+    modePhase = 0;
+    modeTimer = 0;
+    globalMode = 'scatter';
+    freezeTimer = 0;
+    frozenGhost = null;
+    fruit = null;
 }
 
-// 全ドット数を数える
-function countTotalDots() {
-    let count = 0;
-    for (let r = 0; r < MAP_HEIGHT; r++) {
-        for (let c = 0; c < MAP_WIDTH; c++) {
-            if (map[r][c] === 2 || map[r][c] === 3) {
-                count++;
-            }
+function startGame() {
+    hideResultModal();
+    document.getElementById('start-overlay').classList.remove('active');
+    score = 0;
+    level = 1;
+    lives = 3;
+    newRecord = false;
+    extraLifeGiven = false;
+    lv = levelSpec(1);
+    map = cloneMap();
+    totalDots = countDots();
+    dotsEaten = 0;
+    lifeDots = 0;
+    lifeLost = false;
+    idleTimer = 0;
+    popups = [];
+    particles = [];
+    resetActors();
+    state = 'ready';
+    stateTimer = 230;
+    pausedFrom = null;
+    sfx('playStartBGM');
+    document.getElementById('start-btn').textContent = 'Restart';
+    document.getElementById('game-title').classList.add('playing');
+}
+
+function nextLevel() {
+    level++;
+    lv = levelSpec(level);
+    map = cloneMap();
+    totalDots = countDots();
+    dotsEaten = 0;
+    lifeDots = 0;
+    lifeLost = false;
+    idleTimer = 0;
+    resetActors();
+    state = 'ready';
+    stateTimer = 120;
+}
+
+function startFright() {
+    ghostCombo = 0;
+    const dur = lv.frightFrames;
+    ghosts.forEach(g => {
+        if (g.mode === 'active') g.reverse = true;
+        if (dur > 0 && !g.isEyes) g.frightened = true;
+    });
+    frightTimer = dur;
+}
+
+function eatDots() {
+    const c = tileOf(pacman.x), r = tileOf(pacman.y);
+    if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return;
+    const t = map[r][c];
+    if (t !== 2 && t !== 3) return;
+
+    map[r][c] = 0;
+    dotsEaten++;
+    lifeDots++;
+    idleTimer = 0;
+    if (t === 2) {
+        addScore(10);
+        pacman.freeze = 1;
+        sfx('playWaka');
+    } else {
+        addScore(50);
+        pacman.freeze = 3;
+        sfx('playPowerPellet');
+        startFright();
+    }
+
+    if (dotsEaten === 70 || dotsEaten === 170) {
+        const f = fruitFor(level);
+        fruit = { kind: f.kind, pts: f.pts, t: 600 };
+    }
+
+    if (dotsEaten >= totalDots) {
+        state = 'clear';
+        stateTimer = 0;
+        fruit = null;
+        saveHighScore();
+        sfx('playLevelComplete');
+    }
+}
+
+function updateModeSchedule() {
+    const sched = lv.schedule;
+    if (modePhase >= sched.length - 1) return;
+    modeTimer++;
+    if (modeTimer >= sched[modePhase] * 60) {
+        modeTimer = 0;
+        modePhase++;
+        globalMode = modePhase % 2 === 0 ? 'scatter' : 'chase';
+        ghosts.forEach(g => { if (g.mode === 'active') g.reverse = true; });
+    }
+}
+
+function releaseGhosts() {
+    idleTimer++;
+    const g = ghosts.find(gh => gh.mode === 'house');
+    if (!g) return;
+    const limit = lifeLost ? LIFE_LOST_LIMITS[g.idx] : lv.dotLimits[g.idx];
+    if (lifeDots >= limit || idleTimer >= lv.idleLimit) {
+        g.mode = 'exit';
+        idleTimer = 0;
+    }
+}
+
+function burst(x, y, color, n) {
+    for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const s = 0.6 + Math.random() * 2;
+        particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 30 + Math.random() * 20, color });
+    }
+}
+
+function checkCollisions() {
+    for (const g of ghosts) {
+        if (g.mode !== 'active') continue;
+        if (Math.hypot(g.x - pacman.x, g.y - pacman.y) >= 10) continue;
+
+        if (g.frightened) {
+            g.mode = 'eaten';
+            g.frightened = false;
+            ghostCombo++;
+            const pts = 200 * Math.pow(2, ghostCombo - 1);
+            addScore(pts);
+            popups.push({ x: g.x, y: g.y, text: String(pts), color: '#00f2fe', t: 50 });
+            burst(g.x, g.y, '#5b7bff', 14);
+            freezeTimer = 30;
+            frozenGhost = g;
+            sfx('playEatGhost');
+            return;
+        }
+        // パックマンがやられた
+        state = 'dying';
+        stateTimer = 0;
+        fruit = null;
+        saveHighScore();
+        return;
+    }
+}
+
+function updateFruit() {
+    if (!fruit) return;
+    if (--fruit.t <= 0) { fruit = null; return; }
+    if (Math.hypot(pacman.x - FRUIT_POS.x, pacman.y - FRUIT_POS.y) < 9) {
+        addScore(fruit.pts);
+        popups.push({ x: FRUIT_POS.x, y: FRUIT_POS.y, text: String(fruit.pts), color: '#ff7ad9', t: 90 });
+        burst(FRUIT_POS.x, FRUIT_POS.y, '#ff7ad9', 10);
+        sfx('playFruit');
+        fruit = null;
+    }
+}
+
+function updatePlay() {
+    if (freezeTimer > 0) {
+        freezeTimer--;
+        if (freezeTimer === 0) frozenGhost = null;
+        // 食べられた目玉だけは止まらずに帰る
+        ghosts.forEach(g => { if (g.isEyes && g !== frozenGhost) g.update(); });
+        return;
+    }
+
+    if (frightTimer > 0) {
+        frightTimer--;
+        if (frightTimer === 0) ghosts.forEach(g => { g.frightened = false; });
+    } else {
+        updateModeSchedule();
+    }
+
+    releaseGhosts();
+    pacman.update();
+    eatDots();
+    if (state !== 'play') return;
+    checkCollisions();
+    if (state !== 'play' || freezeTimer > 0) return;
+    ghosts.forEach(g => g.update());
+    checkCollisions();
+    updateFruit();
+}
+
+const DEATH_FREEZE = 40;
+const DEATH_TOTAL = 160;
+
+function tick() {
+    globalTimer++;
+
+    switch (state) {
+        case 'start':
+            ghosts.forEach(g => { if (g.mode === 'house') g.update(); else g.anim++; });
+            break;
+        case 'ready':
+            ghosts.forEach(g => { g.anim++; });
+            if (--stateTimer <= 0) state = 'play';
+            break;
+        case 'play':
+            updatePlay();
+            break;
+        case 'dying':
+            stateTimer++;
+            if (stateTimer === DEATH_FREEZE) sfx('playDeath');
+            if (stateTimer === DEATH_FREEZE + 75) burst(pacman.x, pacman.y, '#ffe600', 18);
+            if (stateTimer >= DEATH_TOTAL) afterDeath();
+            break;
+        case 'clear':
+            stateTimer++;
+            if (stateTimer >= 160) nextLevel();
+            break;
+        case 'over':
+            stateTimer++;
+            if (stateTimer === 100) showResultModal();
+            break;
+        default:
+            break; // pause
+    }
+
+    // 演出の更新
+    for (let i = popups.length - 1; i >= 0; i--) {
+        if (state !== 'pause' && --popups[i].t <= 0) popups.splice(i, 1);
+    }
+    if (state !== 'pause') {
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.x += p.vx; p.y += p.vy; p.vx *= 0.94; p.vy *= 0.94;
+            if (--p.life <= 0) particles.splice(i, 1);
         }
     }
-    return count;
+
+    updateAudioLoop();
+    updateHUD();
 }
 
-totalDots = countTotalDots();
+function afterDeath() {
+    lives--;
+    if (lives <= 0) {
+        state = 'over';
+        stateTimer = 0;
+        saveHighScore();
+        document.getElementById('game-title').classList.remove('playing');
+        return;
+    }
+    lifeLost = true;
+    lifeDots = 0;
+    idleTimer = 0;
+    resetActors();
+    state = 'ready';
+    stateTimer = 120;
+}
 
-// --- 描画処理 ---
+function updateAudioLoop() {
+    if (!audio) return;
+    let kind = 'none';
+    if (state === 'play') {
+        if (ghosts.some(g => g.isEyes)) kind = 'eyes';
+        else if (frightTimer > 0) kind = 'power';
+        else kind = 'siren';
+    }
+    try { audio.setLoop(kind, totalDots ? dotsEaten / totalDots : 0); } catch (_) {}
+}
 
-// マップの描画（ネオン調）
-function drawMap() {
+// ---------------------------------------------------------
+// 描画
+// ---------------------------------------------------------
+let renderScale = 1;
+let wallBlue = null;
+let wallWhite = null;
+let wallPath = null;
+
+/** 迷路の外側（到達不可能な空白）を壁として扱うためのフラグ */
+const voidTiles = (() => {
+    const seen = ORIGINAL_MAP.map(row => row.map(() => false));
+    const stack = [[14, 23]];
+    while (stack.length) {
+        let [c, r] = stack.pop();
+        if (r === TUNNEL_ROW) c = (c + COLS) % COLS;
+        if (c < 0 || c >= COLS || r < 0 || r >= ROWS) continue;
+        if (seen[r][c] || ORIGINAL_MAP[r][c] === 1) continue;
+        seen[r][c] = true;
+        stack.push([c + 1, r], [c - 1, r], [c, r + 1], [c, r - 1]);
+    }
+    return ORIGINAL_MAP.map((row, r) => row.map((t, c) => t !== 1 && !seen[r][c]));
+})();
+
+function solid(c, r) {
+    if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return false;
+    return ORIGINAL_MAP[r][c] === 1 || voidTiles[r][c];
+}
+
+/** 壁の輪郭線をつなげたパスを作る（ネオン管風） */
+function buildWallPath() {
+    const p = new Path2D();
+    const d = 5;
+    for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+            if (!solid(c, r)) continue;
+            const x0 = c * T, y0 = r * T;
+            const up = !solid(c, r - 1), dn = !solid(c, r + 1);
+            const lf = !solid(c - 1, r), rt = !solid(c + 1, r);
+            if (up) { p.moveTo(x0 + (lf ? d : 0), y0 + d); p.lineTo(x0 + T - (rt ? d : 0), y0 + d); }
+            if (dn) { p.moveTo(x0 + (lf ? d : 0), y0 + T - d); p.lineTo(x0 + T - (rt ? d : 0), y0 + T - d); }
+            if (lf) { p.moveTo(x0 + d, y0 + (up ? d : 0)); p.lineTo(x0 + d, y0 + T - (dn ? d : 0)); }
+            if (rt) { p.moveTo(x0 + T - d, y0 + (up ? d : 0)); p.lineTo(x0 + T - d, y0 + T - (dn ? d : 0)); }
+            // 内側の角（凹角）を丸くつなぐ
+            if (!up && !lf && !solid(c - 1, r - 1)) { p.moveTo(x0 + d, y0); p.arc(x0, y0, d, 0, Math.PI / 2); }
+            if (!up && !rt && !solid(c + 1, r - 1)) { p.moveTo(x0 + T, y0 + d); p.arc(x0 + T, y0, d, Math.PI / 2, Math.PI); }
+            if (!dn && !lf && !solid(c - 1, r + 1)) { p.moveTo(x0, y0 + T - d); p.arc(x0, y0 + T, d, -Math.PI / 2, 0); }
+            if (!dn && !rt && !solid(c + 1, r + 1)) { p.moveTo(x0 + T - d, y0 + T); p.arc(x0 + T, y0 + T, d, Math.PI, Math.PI * 1.5); }
+        }
+    }
+    return p;
+}
+
+function makeWallLayer(stroke, glow, inner) {
+    const cv = document.createElement('canvas');
+    cv.width = Math.round(W * renderScale);
+    cv.height = Math.round(H * renderScale);
+    const g = cv.getContext('2d');
+    g.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    g.strokeStyle = stroke;
+    g.lineWidth = 3;
+    g.shadowBlur = 10;
+    g.shadowColor = glow;
+    g.stroke(wallPath);
+    g.stroke(wallPath);
+    g.shadowBlur = 0;
+    g.strokeStyle = inner;
+    g.lineWidth = 1;
+    g.stroke(wallPath);
+    return cv;
+}
+
+function setupCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.getBoundingClientRect().width || W;
+    renderScale = Math.min(3, Math.max(1, (cssW * dpr) / W));
+    canvas.width = Math.round(W * renderScale);
+    canvas.height = Math.round(H * renderScale);
+    if (!wallPath) wallPath = buildWallPath();
+    wallBlue = makeWallLayer('#1f5bff', '#2a8bff', '#9cc8ff');
+    wallWhite = makeWallLayer('#ffffff', '#ffffff', '#ffffff');
+}
+
+function drawDots() {
+    const blinkOff = state === 'play' && Math.floor(globalTimer / 12) % 2 === 1;
+    ctx.fillStyle = '#ffcfa0';
+    for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+            if (map[r][c] === 2) ctx.fillRect(c * T + 6.5, r * T + 6.5, 3, 3);
+        }
+    }
+    if (blinkOff) return;
     ctx.save();
-    
-    // ネオンブルーの発光スタイル
-    ctx.strokeStyle = '#0055ff';
-    ctx.lineWidth = 3;
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = '#00aaff';
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    for (let r = 0; r < MAP_HEIGHT; r++) {
-        for (let c = 0; c < MAP_WIDTH; c++) {
-            const tile = map[r][c];
-            const x = c * TILE_SIZE;
-            const y = r * TILE_SIZE;
-
-            if (tile === 1) {
-                // 周囲の壁と繋げるように綺麗に描画
-                ctx.strokeRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
-            } else if (tile === 2) {
-                // ドット（小さな点）
-                ctx.save();
-                ctx.shadowBlur = 5;
-                ctx.shadowColor = '#ffea00';
-                ctx.fillStyle = '#ffb800';
-                ctx.beginPath();
-                ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, 2.5, 0, 2 * Math.PI);
-                ctx.fill();
-                ctx.restore();
-            } else if (tile === 3) {
-                // パワーエサ（点滅する大きな円）
-                const pulseRadius = 5 + Math.sin(globalTimer * 0.15) * 1.5;
-                ctx.save();
-                ctx.shadowBlur = 12;
-                ctx.shadowColor = '#ffe600';
-                ctx.fillStyle = '#ffe600';
-                ctx.beginPath();
-                ctx.arc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, pulseRadius, 0, 2 * Math.PI);
-                ctx.fill();
-                ctx.restore();
-            } else if (tile === 4) {
-                // ゴーストのゲート
-                ctx.save();
-                ctx.strokeStyle = '#ffb8ff';
-                ctx.lineWidth = 2;
-                ctx.shadowColor = '#ffb8ff';
-                ctx.shadowBlur = 4;
-                ctx.beginPath();
-                ctx.moveTo(x, y + TILE_SIZE / 2);
-                ctx.lineTo(x + TILE_SIZE, y + TILE_SIZE / 2);
-                ctx.stroke();
-                ctx.restore();
-            }
+    ctx.fillStyle = '#ffe600';
+    ctx.shadowColor = '#ffe600';
+    ctx.shadowBlur = 12;
+    const pr = 5 + Math.sin(globalTimer * 0.15);
+    for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+            if (map[r][c] !== 3) continue;
+            ctx.beginPath();
+            ctx.arc(c * T + T / 2, r * T + T / 2, pr, 0, Math.PI * 2);
+            ctx.fill();
         }
     }
     ctx.restore();
 }
 
-// スコアとライフのUI更新
-function updateUI() {
-    document.getElementById('score').innerText = String(score).padStart(6, '0');
-    document.getElementById('level').innerText = level;
-    
-    // ライフアイコンの動的描画
-    const livesDiv = document.getElementById('lives');
-    livesDiv.innerHTML = '';
-    for (let i = 0; i < lives; i++) {
-        const lifeIcon = document.createElement('div');
-        lifeIcon.className = 'life-icon';
-        livesDiv.appendChild(lifeIcon);
-    }
+function drawGate() {
+    ctx.save();
+    ctx.strokeStyle = '#ffb8ff';
+    ctx.lineWidth = 2;
+    ctx.shadowColor = '#ffb8ff';
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.moveTo(13 * T, 11 * T + 9);
+    ctx.lineTo(15 * T, 11 * T + 9);
+    ctx.stroke();
+    ctx.restore();
 }
 
-// --- 衝突判定＆イベント ---
+function drawPacman() {
+    const open = pacman.moving ? Math.abs(Math.sin(pacman.animT * Math.PI / 16)) * 0.27 + 0.02 : 0.16;
+    ctx.save();
+    ctx.translate(pacman.x, pacman.y);
+    ctx.rotate(pacman.dir.angle);
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = '#ffe600';
+    ctx.fillStyle = '#ffe600';
+    ctx.beginPath();
+    ctx.arc(0, 0, 7.4, open * Math.PI, (2 - open) * Math.PI);
+    ctx.lineTo(0, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+}
 
-// ドット・エサ捕食チェック
-function checkEatenItems() {
-    const isAligned = (pacman.x - TILE_SIZE / 2) % TILE_SIZE === 0 && (pacman.y - TILE_SIZE / 2) % TILE_SIZE === 0;
-    if (!isAligned) return;
+function drawPacmanDeath() {
+    if (stateTimer < DEATH_FREEZE) { drawPacman(); return; }
+    const p = Math.min(1, (stateTimer - DEATH_FREEZE) / 75);
+    if (p >= 1) return;
+    const open = 0.02 + p * 0.98;
+    ctx.save();
+    ctx.translate(pacman.x, pacman.y);
+    ctx.rotate(-Math.PI / 2);
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = '#ffe600';
+    ctx.fillStyle = '#ffe600';
+    ctx.beginPath();
+    ctx.arc(0, 0, 7.4, open * Math.PI, (2 - open) * Math.PI);
+    ctx.lineTo(0, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+}
 
-    const tile = map[pacman.gridY][pacman.gridX];
-    
-    if (tile === 2) {
-        // 普通のドット
-        map[pacman.gridY][pacman.gridX] = 0;
-        score += 10;
-        dotsEaten++;
-        playSound('playWaka');
-        checkHighScore();
-    } else if (tile === 3) {
-        // パワーエサ
-        map[pacman.gridY][pacman.gridX] = 0;
-        score += 50;
-        dotsEaten++;
-        playSound('playPowerPellet');
-        
-        // ゴースト全員をイジケ状態にする
-        frightenedTimer = frightenedDuration;
-        ghostEatenMultiplier = 1;
-        ghosts.forEach(g => {
-            if (g.mode !== 'house' && g.mode !== 'exit' && g.mode !== 'eaten') {
-                g.mode = 'frightened';
-                g.dir = getOppositeDirection(g.dir); // 即座に反転
+function drawFruit(kind, x, y) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.shadowBlur = 8;
+    const circle = (cx, cy, r, color) => {
+        ctx.fillStyle = color;
+        ctx.shadowColor = color;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+    };
+    const leaf = (cx, cy, rot) => {
+        ctx.fillStyle = '#3ddc84';
+        ctx.shadowColor = '#3ddc84';
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, 3, 1.4, rot, 0, Math.PI * 2);
+        ctx.fill();
+    };
+    switch (kind) {
+        case 'cherry':
+            ctx.strokeStyle = '#3ddc84';
+            ctx.lineWidth = 1.3;
+            ctx.beginPath();
+            ctx.moveTo(-3, 2); ctx.quadraticCurveTo(-1, -5, 4, -7);
+            ctx.moveTo(3, 3); ctx.quadraticCurveTo(3, -3, 4, -7);
+            ctx.stroke();
+            circle(-3.2, 3, 3.4, '#ff2a4d');
+            circle(3, 4, 3.4, '#ff2a4d');
+            ctx.shadowBlur = 0;
+            circle(-4.2, 2, 0.9, '#ffffff');
+            break;
+        case 'strawberry':
+            ctx.fillStyle = '#ff2a4d';
+            ctx.shadowColor = '#ff2a4d';
+            ctx.beginPath();
+            ctx.moveTo(-6, -3);
+            ctx.quadraticCurveTo(0, -6, 6, -3);
+            ctx.quadraticCurveTo(5, 4, 0, 7);
+            ctx.quadraticCurveTo(-5, 4, -6, -3);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#ffe9a0';
+            [[-3, -1], [1, -2], [3, 1], [-1, 2], [0, 4.5], [-3.5, 2]].forEach(([a, b]) => ctx.fillRect(a, b, 1, 1));
+            leaf(-2, -5, -0.3); leaf(2, -5, 0.3);
+            break;
+        case 'orange':
+            circle(0, 1, 6, '#ff9a1f');
+            leaf(2.5, -5, 0.4);
+            ctx.shadowBlur = 0;
+            circle(-2, -1, 1.2, '#ffd29a');
+            break;
+        case 'apple':
+            circle(0, 1.5, 6, '#ff2a3a');
+            ctx.strokeStyle = '#a0612b';
+            ctx.lineWidth = 1.4;
+            ctx.beginPath(); ctx.moveTo(0, -3); ctx.lineTo(1, -7); ctx.stroke();
+            leaf(3, -5.5, -0.5);
+            ctx.shadowBlur = 0;
+            circle(-2.5, -0.5, 1.2, '#ffb3b3');
+            break;
+        case 'melon':
+            circle(0, 0, 6.5, '#3ddc84');
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#0e7a3e';
+            ctx.lineWidth = 1;
+            for (let i = -1; i <= 1; i++) {
+                ctx.beginPath();
+                ctx.ellipse(0, 0, Math.abs(i) * 4 + 0.5, 6.3, 0, 0, Math.PI * 2);
+                ctx.stroke();
             }
-        });
-        playSound('startPowerSiren');
-        checkHighScore();
+            break;
+        case 'grapes':
+            [[-3, -2], [3, -2], [0, -2], [-1.5, 1], [1.5, 1], [0, 4], [-4, 1.5], [4, 1.5]]
+                .forEach(([a, b]) => circle(a, b, 2.3, '#a35cff'));
+            leaf(0, -6, 0);
+            break;
+        case 'bell':
+            ctx.fillStyle = '#ffd400';
+            ctx.shadowColor = '#ffd400';
+            ctx.beginPath();
+            ctx.moveTo(-6, 4);
+            ctx.quadraticCurveTo(-5, -6, 0, -6);
+            ctx.quadraticCurveTo(5, -6, 6, 4);
+            ctx.closePath();
+            ctx.fill();
+            circle(0, 5, 1.8, '#9cc8ff');
+            break;
+        default: // key
+            ctx.strokeStyle = '#7fe9ff';
+            ctx.shadowColor = '#7fe9ff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(0, -3.5, 3, 0, Math.PI * 2);
+            ctx.moveTo(0, -0.5); ctx.lineTo(0, 7);
+            ctx.moveTo(0, 3.5); ctx.lineTo(3, 3.5);
+            ctx.moveTo(0, 6); ctx.lineTo(2.5, 6);
+            ctx.stroke();
     }
-
-    // クリアチェック
-    if (dotsEaten >= totalDots) {
-        gameState = STATE_CLEAR;
-        playSound('playLevelComplete');
-        setTimeout(nextLevel, 2000);
-    }
+    ctx.restore();
 }
 
-// ゴーストとの衝突判定
-function checkGhostCollisions() {
-    if (gameState !== STATE_PLAY) return;
+function drawText(text, x, y, color, size = 12) {
+    ctx.save();
+    ctx.font = `${size}px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 10;
+    ctx.fillText(text, x, y);
+    ctx.restore();
+}
 
-    for (let i = 0; i < ghosts.length; i++) {
-        const g = ghosts[i];
-        // 近接度チェック (ピクセル距離で判定)
-        const dist = Math.hypot(pacman.x - g.x, pacman.y - g.y);
-        
-        if (dist < TILE_SIZE * 0.8) {
-            if (g.mode === 'frightened') {
-                // ゴーストを食べる
-                g.mode = 'eaten';
-                const points = 200 * ghostEatenMultiplier;
-                score += points;
-                ghostEatenMultiplier *= 2; // 次に食べたゴーストはスコア2倍
-                playSound('playEatGhost');
-                
-                // フローティングスコア等の視覚フィードバックを登録（描画フェーズで安全に描画）
-                floatingScores.push({
-                    x: g.x,
-                    y: g.y,
-                    text: points,
-                    timer: 45 // 45フレーム表示
-                });
-                
-                checkHighScore();
-                break; // 同時衝突回避のためブレイク
-            } else if (g.mode !== 'eaten' && g.mode !== 'house' && g.mode !== 'exit') {
-                // パックマン死亡
-                gameState = STATE_DEATH;
-                playSound('playDeath');
-                setTimeout(handleDeath, 1500);
-                break; // 死亡処理の重複登録（フリーズバグ）を防ぐために即ブレイク！
-            }
+function textPlate(y, h) {
+    ctx.fillStyle = 'rgba(3, 0, 8, 0.85)';
+    ctx.fillRect(W / 2 - 92, y - h / 2, 184, h);
+}
+
+function render() {
+    ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+    ctx.fillStyle = '#030008';
+    ctx.fillRect(0, 0, W, H);
+
+    const flashWhite = state === 'clear' && stateTimer >= 60 && Math.floor((stateTimer - 60) / 12) % 2 === 0;
+    ctx.drawImage(flashWhite ? wallWhite : wallBlue, 0, 0, W, H);
+    if (state !== 'clear' || stateTimer < 60) drawGate();
+    drawDots();
+    if (fruit && (fruit.t > 120 || Math.floor(fruit.t / 8) % 2 === 0)) drawFruit(fruit.kind, FRUIT_POS.x, FRUIT_POS.y);
+
+    const hideGhosts = (state === 'dying' && stateTimer >= DEATH_FREEZE) ||
+                       (state === 'clear' && stateTimer >= 60) || state === 'over';
+    if (!hideGhosts) {
+        // 目玉 → 通常の順に描く（重なり時に体が上に来るように）
+        ghosts.filter(g => g.isEyes).forEach(g => { if (g !== frozenGhost) g.draw(); });
+        ghosts.filter(g => !g.isEyes).forEach(g => g.draw());
+    }
+
+    if (state === 'dying') drawPacmanDeath();
+    else if (state !== 'over' && freezeTimer === 0) drawPacman();
+
+    // パーティクル
+    for (const p of particles) {
+        ctx.globalAlpha = Math.max(0, Math.min(1, p.life / 30));
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x - 1, p.y - 1, 2.2, 2.2);
+    }
+    ctx.globalAlpha = 1;
+
+    // 得点ポップアップ
+    for (const p of popups) {
+        drawText(p.text, p.x, p.y - (p.t < 30 ? (30 - p.t) * 0.3 : 0), p.color, 8);
+    }
+
+    // 状態ごとのメッセージ
+    if (state === 'ready') {
+        if (level > 1 || lifeLost) {
+            textPlate(MSG_Y - 22, 16);
+            drawText(`LEVEL ${level}`, W / 2, MSG_Y - 22, '#00f2fe', 9);
         }
+        drawText('READY!', W / 2, MSG_Y, '#ffe600', 12);
+    } else if (state === 'clear' && stateTimer >= 30) {
+        textPlate(MSG_Y, 20);
+        drawText('CLEAR!', W / 2, MSG_Y, '#7dff6a', 12);
+    } else if (state === 'over') {
+        drawText('GAME  OVER', W / 2, MSG_Y, '#ff2d55', 12);
+    } else if (state === 'pause') {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        ctx.fillRect(0, 0, W, H);
+        drawText('PAUSED', W / 2, H / 2 - 12, '#ff2d95', 18);
+        drawText('TAP / P TO RESUME', W / 2, H / 2 + 20, '#cfd3ff', 8);
     }
 }
 
-// ハイスコア更新チェック
-function checkHighScore() {
-    if (score > highScore) {
-        highScore = score;
-        try {
-            localStorage.setItem('pacman_neon_highscore', highScore);
-        } catch (e) {
-            console.warn("Could not save high score to LocalStorage:", e);
+// ---------------------------------------------------------
+// HUD・ボタン
+// ---------------------------------------------------------
+const el = {
+    score: document.getElementById('score'),
+    high: document.getElementById('highscore'),
+    level: document.getElementById('level'),
+    lives: document.getElementById('lives'),
+    startBtn: document.getElementById('start-btn'),
+    pauseBtn: document.getElementById('pause-btn'),
+    muteBtn: document.getElementById('mute-btn'),
+    ctrlPause: document.getElementById('ctrl-pause'),
+    dirBtns: Array.from(document.querySelectorAll('.ctrl-btn[data-dir]'))
+};
+const hudCache = {};
+
+function setOnce(key, value, fn) {
+    if (hudCache[key] === value) return;
+    hudCache[key] = value;
+    fn(value);
+}
+
+function updateHUD() {
+    setOnce('score', score, v => { el.score.textContent = String(v).padStart(6, '0'); });
+    setOnce('high', highScore, v => { el.high.textContent = String(v).padStart(6, '0'); });
+    setOnce('level', level, v => { el.level.textContent = v; });
+    setOnce('lives', lives, v => {
+        el.lives.innerHTML = '';
+        for (let i = 0; i < Math.min(v, 6); i++) {
+            const d = document.createElement('div');
+            d.className = 'life-icon';
+            el.lives.appendChild(d);
         }
-        document.getElementById('highscore').innerText = String(highScore).padStart(6, '0');
-    }
+    });
+    const canPause = state === 'play' || state === 'ready' || state === 'pause';
+    setOnce('pause', `${canPause}|${state === 'pause'}`, () => {
+        el.pauseBtn.disabled = !canPause;
+        el.pauseBtn.textContent = state === 'pause' ? 'Resume' : 'Pause';
+        el.ctrlPause.textContent = state === 'pause' ? '▶' : 'II';
+    });
+    const active = (state === 'play' || state === 'ready') ? pacman.nextDir.name : '';
+    setOnce('dir', active, v => {
+        el.dirBtns.forEach(b => b.classList.toggle('active', b.dataset.dir === v));
+    });
 }
 
-// 死亡処理
-function handleDeath() {
-    try {
-        lives--;
-        if (lives <= 0) {
-            gameState = STATE_OVER;
-            showResultModal('GAME OVER', 'over');
-        } else {
-            // キャラクターだけリセット
-            pacman.reset();
-            ghosts.forEach(g => {
-                try {
-                    g.reset();
-                } catch (ge) {
-                    console.error("Error resetting ghost:", ge);
-                }
-            });
-            gameState = STATE_PLAY;
-            playSound('startSiren');
-        }
-    } catch (e) {
-        console.error("Error during handleDeath:", e);
-    }
+function updateMuteLabel() {
+    const m = audio ? audio.muted : true;
+    el.muteBtn.textContent = m ? 'Sound: OFF' : 'Sound: ON';
 }
 
-// 次のレベル（クリア）処理
-function nextLevel() {
-    level++;
-    map = JSON.parse(JSON.stringify(ORIGINAL_MAP));
-    dotsEaten = 0;
-    frightenedDuration = Math.max(200, 600 - (level * 50)); // レベルアップでイジケ時間短縮
-    pacman.reset();
-    ghosts.forEach(g => g.reset());
-    gameState = STATE_PLAY;
-    playSound('startSiren');
-}
-
-// --- リザルトモーダル表示 ---
-function showResultModal(title, styleClass) {
-    const modal = document.getElementById('result-modal');
-    const titleEl = document.getElementById('modal-title');
-    document.getElementById('final-score').innerText = score;
-    document.getElementById('final-level').innerText = level;
-    
-    titleEl.innerText = title;
-    titleEl.className = `modal-title ${styleClass}`;
-    
-    modal.classList.add('active');
+function showResultModal() {
+    document.getElementById('final-score').textContent = score;
+    document.getElementById('final-level').textContent = level;
+    document.getElementById('modal-title').textContent = 'GAME OVER';
+    document.getElementById('new-record').classList.toggle('show', newRecord && score > 0);
+    document.getElementById('result-modal').classList.add('active');
 }
 
 function hideResultModal() {
     document.getElementById('result-modal').classList.remove('active');
 }
 
-// --- メインゲームループ ---
-function gameLoop() {
-    try {
-        globalTimer++;
-
-        // 画面クリア
-        ctx.fillStyle = '#030008';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        // マップとUI描画
-        drawMap();
-        updateUI();
-
-        if (gameState === STATE_PLAY) {
-            // モード変更タイマー（CHASEとSCATTERの周期切り替え）
-            // 20秒CHASE, 7秒SCATTERの繰り返し
-            const cycle = globalTimer % 1620; // 約27秒周期
-            
-            // イジケ時間の減少
-            if (frightenedTimer > 0) {
-                frightenedTimer--;
-                if (frightenedTimer === 0) {
-                    playSound('stopPowerSiren');
-                    playSound('startSiren');
-                    ghosts.forEach(g => {
-                        if (g.mode === 'frightened') g.mode = 'chase';
-                    });
-                }
-            }
-
-            ghosts.forEach(g => {
-                if (g.mode !== 'house' && g.mode !== 'exit' && g.mode !== 'eaten' && frightenedTimer === 0) {
-                    if (cycle < 1200) {
-                        g.mode = 'chase';
-                    } else {
-                        g.mode = 'scatter';
-                    }
-                }
-            });
-
-            // キャラクター位置更新
-            pacman.update();
-            ghosts.forEach(g => g.update());
-
-            // 衝突チェック
-            checkEatenItems();
-            checkGhostCollisions();
-        }
-
-        // プレイヤーとゴーストの描画
-        if (gameState !== STATE_DEATH) {
-            pacman.draw();
-            ghosts.forEach(g => g.draw());
-        } else {
-            // 死亡時のパックマンの簡単な消滅エフェクト
-            try {
-                ctx.save();
-                ctx.translate(pacman.x, pacman.y);
-                ctx.fillStyle = '#ffe600';
-                ctx.beginPath();
-                const deathProgress = (globalTimer % 30) / 30; // 0〜1
-                const radius = Math.max(0.1, (TILE_SIZE / 2) * (1 - deathProgress));
-                ctx.arc(0, 0, radius, 0, 2 * Math.PI);
-                ctx.fill();
-                ctx.restore();
-            } catch (e) {
-                console.error("Error drawing death effect:", e);
-                try { ctx.restore(); } catch (_) {}
-            }
-        }
-
-        // フローティングスコアの安全な描画と更新
-        for (let i = floatingScores.length - 1; i >= 0; i--) {
-            const fs = floatingScores[i];
-            try {
-                ctx.save();
-                ctx.fillStyle = '#ffffff';
-                ctx.font = '10px "Press Start 2P"';
-                ctx.textAlign = 'center';
-                // 上にふわっと浮き上がるアニメーション
-                ctx.fillText(fs.text, fs.x, fs.y - (45 - fs.timer) * 0.4);
-                ctx.restore();
-            } catch (fsErr) {
-                console.error("Error drawing floating score:", fsErr);
-                try { ctx.restore(); } catch (_) {}
-            }
-            fs.timer--;
-            if (fs.timer <= 0) {
-                floatingScores.splice(i, 1);
-            }
-        }
-
-        // 各ステータスの画面表示
-        if (gameState === STATE_START) {
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = '#00f2fe';
-            ctx.font = '14px "Press Start 2P"';
-            ctx.textAlign = 'center';
-            ctx.fillText('PRESS START GAME', canvas.width / 2, canvas.height / 2 - 20);
-            ctx.fillStyle = '#ffe600';
-            ctx.font = '10px "Orbitron"';
-            ctx.fillText('CLICK BUTTON OR PRESS ENTER', canvas.width / 2, canvas.height / 2 + 10);
-        } else if (gameState === STATE_PAUSE) {
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = '#ff007f';
-            ctx.font = '18px "Press Start 2P"';
-            ctx.textAlign = 'center';
-            ctx.fillText('PAUSED', canvas.width / 2, canvas.height / 2);
-        }
-
-        // 仮想キーのハイライト更新
-        if (gameState === STATE_PLAY) {
-            document.querySelectorAll('.ctrl-btn').forEach(btn => {
-                const btnDir = btn.getAttribute('data-dir');
-                if (btnDir === pacman.nextDir.name) {
-                    btn.classList.add('active');
-                } else {
-                    btn.classList.remove('active');
-                }
-            });
-        } else {
-            document.querySelectorAll('.ctrl-btn').forEach(btn => btn.classList.remove('active'));
-        }
-    } catch (e) {
-        console.error("Error in gameLoop:", e);
-    }
-
-    requestAnimationFrame(gameLoop);
+// ---------------------------------------------------------
+// 入力
+// ---------------------------------------------------------
+function unlockAudio() {
+    if (audio) audio.init();
 }
 
-// --- 入力ハンドラー ---
+function setDirection(name) {
+    if (!DIR[name]) return;
+    if (state === 'play' || state === 'ready') pacman.nextDir = DIR[name];
+}
 
-function handleDirectionInput(dirStr) {
-    if (gameState !== STATE_PLAY) return;
-    
-    switch(dirStr) {
-        case 'up':
-            pacman.nextDir = DIR_UP;
-            break;
-        case 'down':
-            pacman.nextDir = DIR_DOWN;
-            break;
-        case 'left':
-            pacman.nextDir = DIR_LEFT;
-            break;
-        case 'right':
-            pacman.nextDir = DIR_RIGHT;
-            break;
+function togglePause() {
+    if (state === 'pause') {
+        state = pausedFrom || 'play';
+        pausedFrom = null;
+    } else if (state === 'play' || state === 'ready') {
+        pausedFrom = state;
+        state = 'pause';
+        saveHighScore();
     }
 }
 
-// キーボード
-window.addEventListener('keydown', (e) => {
-    // 矢印キーやスペースによるブラウザスクロール防止
-    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(e.code) > -1) {
-        e.preventDefault();
-    }
+function requestStart() {
+    unlockAudio();
+    startGame();
+}
 
-    switch(e.key.toLowerCase()) {
-        case 'arrowup':
-        case 'w':
-            handleDirectionInput('up');
-            break;
-        case 'arrowdown':
-        case 's':
-            handleDirectionInput('down');
-            break;
-        case 'arrowleft':
-        case 'a':
-            handleDirectionInput('left');
-            break;
-        case 'arrowright':
-        case 'd':
-            handleDirectionInput('right');
-            break;
-        case 'p':
-            if (gameState === STATE_PLAY) {
-                gameState = STATE_PAUSE;
-                playSound('stopSiren');
-                playSound('stopPowerSiren');
-            } else if (gameState === STATE_PAUSE) {
-                gameState = STATE_PLAY;
-                if (frightenedTimer > 0) playSound('startPowerSiren');
-                else playSound('startSiren');
-            }
-            break;
-        case 'enter':
-            if (gameState === STATE_START) {
-                startGame();
-            }
-            break;
+const KEY_DIRS = {
+    arrowup: 'up', w: 'up',
+    arrowdown: 'down', s: 'down',
+    arrowleft: 'left', a: 'left',
+    arrowright: 'right', d: 'right'
+};
+
+window.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
+    unlockAudio();
+    if (KEY_DIRS[k]) { setDirection(KEY_DIRS[k]); return; }
+    if (k === 'p' || k === 'escape') { togglePause(); return; }
+    if (k === 'm') { if (audio) audio.toggleMute(); updateMuteLabel(); return; }
+    if (k === 'enter' || k === ' ') {
+        if (state === 'start' || state === 'over') requestStart();
+        else if (state === 'pause') togglePause();
     }
 });
 
-// --- タッチ操作およびスワイプ、スクロール防止、タッチデバイス自動検出 ---
-let touchStartX = 0;
-let touchStartY = 0;
-const SWIPE_THRESHOLD = 30; // スワイプと判定する最小ピクセル数
-
-// タッチデバイス判定とコントロール表示の制御
-const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
-const mobileControls = document.querySelector('.mobile-controls');
-
-if (mobileControls) {
-    if (isTouchDevice) {
-        mobileControls.style.display = ''; // CSSの定義(grid)に従う
-    } else {
-        // 非タッチデバイスでは画面を縮めても非表示に強制する
-        mobileControls.style.setProperty('display', 'none', 'important');
-    }
-}
-
-// 仮想キーのイベントハンドリング（touchstart & mousedown）
-document.querySelectorAll('.ctrl-btn').forEach(btn => {
-    btn.addEventListener('touchstart', (e) => {
+// 十字キー
+el.dirBtns.forEach(btn => {
+    btn.addEventListener('pointerdown', e => {
         e.preventDefault();
-        const dir = btn.getAttribute('data-dir');
-        handleDirectionInput(dir);
-        
-        // 音声のアンロック
-        if (window.gameAudio && typeof window.gameAudio.init === 'function') {
-            try { window.gameAudio.init(); } catch (_) {}
-        }
-    }, { passive: false });
-    
-    btn.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        const dir = btn.getAttribute('data-dir');
-        handleDirectionInput(dir);
+        unlockAudio();
+        setDirection(btn.dataset.dir);
     });
 });
+el.ctrlPause.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    unlockAudio();
+    if (state === 'start' || state === 'over') requestStart();
+    else togglePause();
+});
 
-// スワイプによる操作 & スクロール防止イベントリスナー
-window.addEventListener('touchstart', (e) => {
-    const target = e.target;
-    // ゲーム画面、仮想キー、またはそのコンテナでのみスワイプ・スクロール制御を行う
-    if (target.closest('#gameCanvas') || target.closest('.mobile-controls') || target.closest('.canvas-wrapper')) {
-        if (target.tagName !== 'BUTTON' && target.tagName !== 'A') {
-            e.preventDefault();
-        }
-    }
-    
-    touchStartX = e.changedTouches[0].clientX;
-    touchStartY = e.changedTouches[0].clientY;
-    
-    // 音声のアンロック
-    if (window.gameAudio && typeof window.gameAudio.init === 'function') {
-        try { window.gameAudio.init(); } catch (_) {}
-    }
-}, { passive: false });
+// スワイプ（指を離さなくても、動かした時点で方向転換）
+const wrapper = document.getElementById('canvas-wrapper');
+let swipe = null;
+wrapper.addEventListener('pointerdown', e => {
+    if (e.target.closest('button')) return;
+    unlockAudio();
+    swipe = { x: e.clientX, y: e.clientY, moved: false, id: e.pointerId };
+});
+wrapper.addEventListener('pointermove', e => {
+    if (!swipe || e.pointerId !== swipe.id) return;
+    const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 18) return;
+    if (Math.abs(dx) > Math.abs(dy)) setDirection(dx > 0 ? 'right' : 'left');
+    else setDirection(dy > 0 ? 'down' : 'up');
+    swipe.x = e.clientX;
+    swipe.y = e.clientY;
+    swipe.moved = true;
+});
+const endSwipe = e => {
+    if (!swipe || e.pointerId !== swipe.id) return;
+    if (!swipe.moved && state === 'pause') togglePause(); // タップで再開
+    swipe = null;
+};
+wrapper.addEventListener('pointerup', endSwipe);
+wrapper.addEventListener('pointercancel', endSwipe);
+// スクロールやズームを防止
+wrapper.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+document.getElementById('mobile-controls').addEventListener('touchmove', e => e.preventDefault(), { passive: false });
 
-window.addEventListener('touchmove', (e) => {
-    const target = e.target;
-    if (target.closest('#gameCanvas') || target.closest('.mobile-controls') || target.closest('.canvas-wrapper')) {
-        if (target.tagName !== 'BUTTON' && target.tagName !== 'A') {
-            e.preventDefault();
-        }
-    }
-}, { passive: false });
+// ボタン類
+document.getElementById('overlay-start-btn').addEventListener('click', requestStart);
+el.startBtn.addEventListener('click', requestStart);
+document.getElementById('restart-btn').addEventListener('click', requestStart);
+el.pauseBtn.addEventListener('click', () => { unlockAudio(); togglePause(); });
+el.muteBtn.addEventListener('click', () => {
+    unlockAudio();
+    if (audio) audio.toggleMute();
+    updateMuteLabel();
+});
+document.addEventListener('pointerdown', unlockAudio, { passive: true });
 
-window.addEventListener('touchend', (e) => {
-    const target = e.target;
-    if (target.closest('#gameCanvas') || target.closest('.mobile-controls') || target.closest('.canvas-wrapper')) {
-        if (target.tagName !== 'BUTTON' && target.tagName !== 'A') {
-            e.preventDefault();
-        }
-    }
-    
-    const touchEndX = e.changedTouches[0].clientX;
-    const touchEndY = e.changedTouches[0].clientY;
-    
-    const diffX = touchEndX - touchStartX;
-    const diffY = touchEndY - touchStartY;
-    
-    if (Math.max(Math.abs(diffX), Math.abs(diffY)) > SWIPE_THRESHOLD) {
-        if (Math.abs(diffX) > Math.abs(diffY)) {
-            // 左右のスワイプ
-            if (diffX > 0) {
-                handleDirectionInput('right');
-            } else {
-                handleDirectionInput('left');
-            }
-        } else {
-            // 上下のスワイプ
-            if (diffY > 0) {
-                handleDirectionInput('down');
-            } else {
-                handleDirectionInput('up');
-            }
-        }
-    }
-}, { passive: false });
+// 画面を離れたら自動で一時停止
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden && (state === 'play' || state === 'ready')) togglePause();
+    if (document.hidden) saveHighScore();
+});
+window.addEventListener('pagehide', saveHighScore);
 
-// --- ゲーム開始・再起動 ---
+// タッチ端末判定
+const isTouch = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ||
+                ('ontouchstart' in window && navigator.maxTouchPoints > 0);
+if (isTouch) document.body.classList.add('touch');
 
-function startGame() {
-    try {
-        gameState = STATE_PLAY;
-        score = 0;
-        level = 1;
-        lives = 3;
-        dotsEaten = 0;
-        frightenedTimer = 0;
-        floatingScores = []; // スコアアニメーションをクリア
-        map = JSON.parse(JSON.stringify(ORIGINAL_MAP));
-        pacman.reset();
-        ghosts.forEach(g => g.reset());
-        
-        // UIを更新して音を鳴らす
-        updateUI();
-        
-        playSound('playStartBGM');
-        
-        // イントロが終わるころ（約4秒後）にサイレン開始
-        setTimeout(() => {
-            if (gameState === STATE_PLAY) {
-                playSound('startSiren');
-            }
-        }, 4500);
+// ---------------------------------------------------------
+// メインループ（固定タイムステップ）
+// ---------------------------------------------------------
+let lastTime = performance.now();
+let acc = 0;
 
-        const startBtn = document.getElementById('start-btn');
-        startBtn.innerText = 'Restart';
-        document.getElementById('game-title').classList.add('playing');
-    } catch (e) {
-        console.error("Error during startGame:", e);
+function frame(now) {
+    let dt = now - lastTime;
+    lastTime = now;
+    if (dt > 250) dt = 250; // タブ復帰時などの大きな飛びを抑制
+    acc += dt;
+    let steps = 0;
+    while (acc >= FRAME_MS && steps < 5) {
+        try { tick(); } catch (e) { console.error('tick error:', e); }
+        acc -= FRAME_MS;
+        steps++;
     }
+    if (steps >= 5) acc = 0;
+    try { render(); } catch (e) { console.error('render error:', e); }
+    requestAnimationFrame(frame);
 }
 
-// イベントリスナー登録
-document.getElementById('start-btn').addEventListener('click', () => {
-    // ユーザー操作によるAudioContextの初期化
-    if (window.gameAudio && typeof window.gameAudio.init === 'function') {
-        try {
-            window.gameAudio.init();
-        } catch(e) {}
-    }
-    startGame();
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(setupCanvas, 150);
 });
 
-document.getElementById('restart-btn').addEventListener('click', () => {
-    hideResultModal();
-    startGame();
-});
+setupCanvas();
+updateMuteLabel();
+updateHUD();
+if (document.fonts && document.fonts.load) {
+    document.fonts.load(`12px ${FONT}`).catch(() => {});
+}
+requestAnimationFrame(frame);
 
-const muteBtn = document.getElementById('mute-btn');
-muteBtn.addEventListener('click', () => {
-    let isMuted = false;
-    if (window.gameAudio && typeof window.gameAudio.toggleMute === 'function') {
-        try {
-            isMuted = window.gameAudio.toggleMute();
-        } catch(e) {}
-    }
-    muteBtn.innerText = `Mute: ${isMuted ? 'ON' : 'OFF'}`;
-});
-
-// ループの開始
-requestAnimationFrame(gameLoop);
+})();
